@@ -9,9 +9,16 @@ on:
 permissions:
   contents: read
 
+# Serialize the complete Pages pipeline while allowing PR checks to run independently.
+concurrency:
+  group: ${{ github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch && 'pages' || format('ci-{0}', github.run_id) }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      is-current: ${{ steps.latest.outputs.is-current }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -33,22 +40,30 @@ jobs:
         run: vp run build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-      - name: Upload Pages artifact
+      - name: Check the default branch head
+        id: latest
         if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data } = await github.rest.repos.getBranch({
+              ...context.repo,
+              branch: context.payload.repository.default_branch,
+            });
+            core.setOutput('is-current', data.commit.sha === context.sha);
+      - name: Upload Pages artifact
+        if: steps.latest.outputs.is-current == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: dist
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref_name == github.event.repository.default_branch
+    if: needs.build.outputs.is-current == 'true'
     needs: build
     runs-on: ubuntu-latest
     permissions:
       pages: write
       id-token: write
-    concurrency:
-      group: pages
-      cancel-in-progress: false
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
