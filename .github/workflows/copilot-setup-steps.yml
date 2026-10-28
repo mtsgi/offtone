@@ -22,7 +22,11 @@ jobs:
       - name: Set up Vite+
         uses: voidzero-dev/setup-vp@v1.21.2
         with:
+          node-version-file: .node-version
+          version-file: package.json
           cache: true
-          run-install: true
+          run-install: false
+      - name: Install dependencies
+        run: vp install --frozen-lockfile
       - name: Verify Vite+
         run: vp --version

@@ -29,3 +29,9 @@ release. Add a tool name to select part of the graph. For example, run
 - [ ] If setup, runtime, or package-manager behavior looks wrong, run `vp env doctor` and include its output when asking for help.
 
 <!--VITE PLUS END-->
+
+## Project validation
+
+- Use the Node.js version in `.node-version` and the Vite+ version in `package.json`; see README for setup and Vue RC updates.
+- After pulling changes, run `vp install --frozen-lockfile` to reproduce the lockfile.
+- Run `vp check`, `vp test run`, and `vp run build`. The build includes Vue SFC type checking.
