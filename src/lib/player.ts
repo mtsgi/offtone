@@ -17,6 +17,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let objectUrl: string | undefined;
   let generation = 0;
   let pending = false;
+  let disposed = false;
 
   function syncMedia(): void {
     if (!("mediaSession" in navigator)) return;
@@ -38,6 +39,13 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     objectUrl = undefined;
   }
 
+  function clearSource(): void {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    releaseUrl();
+  }
+
   /** 現在の再生状態を取得する。 */
   function getState(): PlaybackState {
     return state;
@@ -53,25 +61,23 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   function setTracks(tracks: Track[]): void {
     generation++;
     pending = false;
-    audio.pause();
-    audio.removeAttribute("src");
-    audio.load();
-    releaseUrl();
+    clearSource();
     update({ tracks, index: -1, playing: false, error: "" });
   }
 
   /** 指定した曲を再生し、読み取れない曲や未対応の曲を飛ばす。 */
   async function playAt(target: number): Promise<void> {
-    if (target < 0 || target >= state.tracks.length) return;
+    if (disposed || target < 0 || target >= state.tracks.length) return;
     const run = ++generation;
-    pending = false;
-    audio.pause();
-    releaseUrl();
+    pending = true;
+    clearSource();
+    update({ playing: false });
 
     for (let nextIndex = target; nextIndex < state.tracks.length; nextIndex++) {
       const track = state.tracks[nextIndex];
       if (!track || run !== generation) return;
       update({ index: nextIndex });
+      if (run !== generation) return;
       try {
         const file = await track.handle.getFile();
         if (run !== generation) return;
@@ -84,30 +90,52 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
         return;
       } catch (cause) {
         if (run !== generation) return;
-        pending = false;
-        if (cause instanceof DOMException && cause.name === "NotAllowedError") {
-          update({ error: "再生を開始できませんでした。再生ボタンを押してください。" });
+        if (objectUrl && cause instanceof DOMException && cause.name === "NotAllowedError") {
+          pending = false;
+          update({
+            playing: false,
+            error: "再生を開始できませんでした。再生ボタンを押してください。",
+          });
           return;
         }
-        releaseUrl();
-        audio.removeAttribute("src");
-        update({ error: `「${track.name}」を再生できませんでした。` });
+        clearSource();
+        update({ playing: false, error: `「${track.name}」を再生できませんでした。` });
       }
     }
-    update({ playing: false });
+    if (run === generation) {
+      pending = false;
+      update({ playing: false });
+    }
+  }
+
+  function pause(): void {
+    if (pending) {
+      generation++;
+      pending = false;
+      clearSource();
+      update({ playing: false });
+    } else {
+      audio.pause();
+    }
   }
 
   /** 再生と一時停止を切り替え、曲が未選択なら先頭から再生する。 */
   async function toggle(): Promise<void> {
-    if (state.playing) {
-      audio.pause();
+    if (disposed) return;
+    if (state.playing || pending) {
+      pause();
     } else if (state.index < 0 || !audio.src) {
       await playAt(Math.max(state.index, 0));
     } else {
+      const run = ++generation;
+      pending = true;
       try {
         await audio.play();
+        if (run === generation) pending = false;
       } catch {
-        update({ error: "再生を開始できませんでした。もう一度お試しください。" });
+        if (run !== generation) return;
+        pending = false;
+        update({ playing: false, error: "再生を開始できませんでした。もう一度お試しください。" });
       }
     }
   }
@@ -121,14 +149,15 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   }
 
   function onPlay(): void {
-    update({ playing: true });
+    if (objectUrl && !audio.paused) update({ playing: true });
   }
 
   function onPause(): void {
-    update({ playing: false });
+    if (audio.paused) update({ playing: false });
   }
 
   function onEnded(): void {
+    if (!objectUrl || pending || !audio.ended) return;
     if (state.index + 1 < state.tracks.length) {
       next();
     } else {
@@ -138,10 +167,12 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
 
   function onError(): void {
     const track = state.tracks[state.index];
-    if (track && audio.src && !pending) {
-      update({ error: `「${track.name}」を再生できませんでした。` });
-      next();
-    }
+    if (!track || !objectUrl || !audio.error) return;
+    generation++;
+    pending = false;
+    clearSource();
+    update({ playing: false, error: `「${track.name}」を再生できませんでした。` });
+    next();
   }
 
   audio.addEventListener("play", onPlay);
@@ -153,10 +184,10 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     [
       "play",
       () => {
-        if (!state.playing) void toggle();
+        if (!state.playing && !pending) void toggle();
       },
     ],
-    ["pause", () => audio.pause()],
+    ["pause", pause],
     ["previoustrack", previous],
     ["nexttrack", next],
   ];
@@ -173,10 +204,9 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   /** 音声要素の購読とメディア操作を解除し、使用中の URL を解放する。 */
   function dispose(): void {
     generation++;
-    audio.pause();
-    audio.removeAttribute("src");
-    audio.load();
-    releaseUrl();
+    disposed = true;
+    pending = false;
+    clearSource();
     audio.removeEventListener("play", onPlay);
     audio.removeEventListener("pause", onPause);
     audio.removeEventListener("ended", onEnded);

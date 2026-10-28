@@ -61,6 +61,7 @@ describe("ライブラリと再生ストア", () => {
     const audioPlay = vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
       this: HTMLMediaElement,
     ) {
+      Object.defineProperty(this, "paused", { configurable: true, value: false });
       this.dispatchEvent(new Event("play"));
       return Promise.resolve();
     });
