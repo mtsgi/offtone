@@ -268,3 +268,108 @@ describe("player", () => {
     expect(revokeObjectURL).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("queue refresh", () => {
+  it("preserves playback, position and source as tracks are added, removed and reordered", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    const b = track("b.mp3");
+    const c = track("c.mp3");
+    player.setTracks([a, b]);
+    await player.playAt(1);
+    audio.currentTime = 17;
+    const pause = vi.spyOn(audio, "pause").mockClear();
+    const load = vi.spyOn(audio, "load").mockClear();
+    player.updateTracks([c, a, track("b.mp3")]);
+    expect(player.getState()).toMatchObject({ index: 2, playing: true });
+    expect(audio.currentTime).toBe(17);
+    player.updateTracks([track("b.mp3"), c]);
+    expect(player.getState()).toMatchObject({ index: 0, playing: true });
+    expect(audio.src).toBe("blob:track");
+    expect(pause).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    ended(audio);
+    await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 1, playing: true }));
+    player.dispose();
+  });
+
+  it("keeps a paused track and leaves an unselected queue unselected", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setTracks([track("a.mp3")]);
+    player.updateTracks([track("a.mp3"), track("b.mp3")]);
+    expect(player.getState().index).toBe(-1);
+    await player.playAt(0);
+    await player.toggle();
+    audio.currentTime = 8;
+    const load = vi.spyOn(audio, "load").mockClear();
+    player.updateTracks([track("b.mp3"), track("a.mp3")]);
+    expect(player.getState()).toMatchObject({ index: 1, playing: false });
+    expect(audio.currentTime).toBe(8);
+    expect(load).not.toHaveBeenCalled();
+    await player.toggle();
+    expect(player.getState().playing).toBe(true);
+    player.dispose();
+  });
+
+  it("stops and clears the selection and Media Session metadata when the current track disappears", async () => {
+    const mediaSession = { playbackState: "none", metadata: null, setActionHandler: vi.fn() };
+    Object.defineProperty(navigator, "mediaSession", { configurable: true, value: mediaSession });
+    vi.stubGlobal(
+      "MediaMetadata",
+      class {
+        constructor(public init: MediaMetadataInit) {}
+      },
+    );
+    try {
+      const audio = audioElement();
+      const player = createPlayer(audio);
+      player.setTracks([track("a.mp3"), track("b.mp3")]);
+      await player.playAt(0);
+      player.updateTracks([track("b.mp3")]);
+      expect(player.getState()).toMatchObject({ index: -1, playing: false });
+      expect(mediaSession.metadata).toBeNull();
+      expect(mediaSession.playbackState).toBe("paused");
+      expect(revokeObjectURL).toHaveBeenCalledOnce();
+      await player.toggle();
+      expect(player.getState()).toMatchObject({ index: 0, playing: true });
+      player.dispose();
+    } finally {
+      Reflect.deleteProperty(navigator, "mediaSession");
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("tracks a pending read across a reorder and skips from its new position on failure", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    const slow = deferred<File>();
+    const b = track("b.mp3");
+    vi.spyOn(b.handle, "getFile").mockReturnValue(slow.promise);
+    player.setTracks([track("a.mp3"), b, track("c.mp3")]);
+    const pending = player.playAt(1);
+    player.updateTracks([track("c.mp3"), track("b.mp3"), track("d.mp3"), track("a.mp3")]);
+    slow.reject(new Error("read failed"));
+    await pending;
+    expect(player.getState()).toMatchObject({ index: 2, playing: true });
+    expect(player.getState().tracks[2]?.name).toBe("d.mp3");
+    player.dispose();
+  });
+
+  it("cancels an in-flight read when its track is removed", async () => {
+    const player = createPlayer(audioElement());
+    const slow = deferred<File>();
+    const item = track("slow.mp3");
+    vi.spyOn(item.handle, "getFile").mockReturnValue(slow.promise);
+    player.setTracks([item]);
+    const pending = player.playAt(0);
+    player.updateTracks([track("other.mp3")]);
+    slow.resolve(new File([], "slow.mp3"));
+    await pending;
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(player.getState()).toMatchObject({ index: -1, playing: false });
+    player.dispose();
+  });
+});

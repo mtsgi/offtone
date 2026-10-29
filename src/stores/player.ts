@@ -28,6 +28,7 @@ export const usePlayerStore = defineStore("player", () => {
     error,
     current,
     setTracks: player.setTracks,
+    updateTracks: player.updateTracks,
     playAt: player.playAt,
     toggle: player.toggle,
     previous: player.previous,

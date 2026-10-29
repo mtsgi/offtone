@@ -100,3 +100,218 @@ describe("ライブラリと再生ストア", () => {
     expect(player.tracks).toEqual(tracks);
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+function playable(name: string): Track {
+  return {
+    name,
+    path: name,
+    handle: {
+      getFile: vi.fn().mockResolvedValue(new File(["audio"], name)),
+    } as unknown as FileSystemFileHandle,
+  };
+}
+
+describe("ライブラリ更新の競合", () => {
+  it("再スキャンで再生中の音源と曲を維持し、更新したキューを反映する", async () => {
+    const selected = folder("granted");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory)
+      .mockResolvedValueOnce([playable("a.mp3"), playable("b.mp3")])
+      .mockResolvedValueOnce([playable("b.mp3"), playable("c.mp3")]);
+    vi.stubGlobal(
+      "URL",
+      Object.assign(class extends URL {}, {
+        createObjectURL: vi.fn().mockReturnValue("blob:track"),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      Object.defineProperty(this, "paused", { configurable: true, value: false });
+      this.dispatchEvent(new Event("play"));
+      return Promise.resolve();
+    });
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    await player.playAt(1);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockClear();
+    const load = vi.spyOn(HTMLMediaElement.prototype, "load").mockClear();
+    await library.refresh();
+    expect(player.current?.path).toBe("b.mp3");
+    expect(player.index).toBe(0);
+    expect(player.playing).toBe(true);
+    expect(player.tracks.map((t) => t.path)).toEqual(["b.mp3", "c.mp3"]);
+    expect(pause).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+    expect(vi.spyOn(URL, "revokeObjectURL")).not.toHaveBeenCalled();
+    player.$dispose();
+  });
+
+  it("別ルートの同じ相対パスは同一曲とみなさず、選択の完了順を守る", async () => {
+    const a = folder("granted");
+    const b = folder("granted");
+    a.isSameEntry = vi.fn().mockResolvedValue(false);
+    const slow = deferred<Track[]>();
+    const picker = vi.fn().mockResolvedValueOnce(a).mockResolvedValueOnce(b);
+    vi.stubGlobal("showDirectoryPicker", picker);
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory)
+      .mockReturnValueOnce(slow.promise)
+      .mockResolvedValueOnce([playable("same.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    const old = library.selectFolder();
+    await vi.waitFor(() => expect(scanDirectory).toHaveBeenCalledTimes(1));
+    await library.selectFolder();
+    slow.resolve([playable("old.mp3")]);
+    await old;
+    expect(library.directory).toBe(b);
+    expect(player.tracks[0]?.name).toBe("same.mp3");
+    expect(saveDirectory).toHaveBeenCalledTimes(1);
+
+    vi.mocked(picker).mockResolvedValueOnce(a);
+    vi.mocked(scanDirectory).mockResolvedValueOnce([playable("same.mp3")]);
+    b.isSameEntry = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal(
+      "URL",
+      Object.assign(class extends URL {}, {
+        createObjectURL: vi.fn().mockReturnValue("blob:track"),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      Object.defineProperty(this, "paused", { configurable: true, value: false });
+      this.dispatchEvent(new Event("play"));
+      return Promise.resolve();
+    });
+    player.setTracks([playable("same.mp3")]);
+    await player.playAt(0);
+    expect(player.playing).toBe(true);
+    await library.selectFolder();
+    expect(player.index).toBe(-1);
+    expect(library.directory).toBe(a);
+  });
+
+  it("同一フォルダーの連続更新で古い成功や失敗を無視する", async () => {
+    const selected = folder("granted");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory).mockResolvedValueOnce([playable("initial.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    const slow = deferred<Track[]>();
+    const olderFailure = deferred<Track[]>();
+    const latest = deferred<Track[]>();
+    vi.mocked(scanDirectory)
+      .mockReturnValueOnce(slow.promise)
+      .mockReturnValueOnce(olderFailure.promise)
+      .mockReturnValueOnce(latest.promise);
+    const first = library.refresh();
+    const second = library.refresh();
+    const third = library.refresh();
+    slow.resolve([playable("old.mp3")]);
+    olderFailure.reject(new Error("old error"));
+    await Promise.all([first, second]);
+    expect(library.busy).toBe(true);
+    expect(library.status).toBe("");
+    latest.resolve([playable("new.mp3")]);
+    await third;
+    expect(player.tracks[0]?.name).toBe("new.mp3");
+    expect(library.busy).toBe(false);
+  });
+
+  it("権限失効と読み取りエラーで正常なキューを保持し、再試行で復旧する", async () => {
+    const selected = folder("granted");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory)
+      .mockResolvedValueOnce([playable("original.mp3")])
+      .mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"))
+      .mockRejectedValueOnce(new Error("read error"))
+      .mockResolvedValueOnce([playable("recovered.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    await library.refresh();
+    expect(library.needsPermission).toBe(true);
+    expect(player.tracks[0]?.name).toBe("original.mp3");
+    await library.restorePermission();
+    expect(library.status).not.toBe("");
+    expect(player.tracks[0]?.name).toBe("original.mp3");
+    await library.restorePermission();
+    expect(library.needsPermission).toBe(false);
+    expect(library.status).toBe("");
+    expect(player.tracks[0]?.name).toBe("recovered.mp3");
+  });
+  it("同じルートを別ハンドルで再選択しても現在曲を維持する", async () => {
+    const first = folder("granted");
+    const second = folder("granted");
+    first.isSameEntry = vi.fn().mockResolvedValue(true);
+    vi.stubGlobal(
+      "showDirectoryPicker",
+      vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second),
+    );
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    vi.stubGlobal(
+      "URL",
+      Object.assign(class extends URL {}, {
+        createObjectURL: vi.fn().mockReturnValue("blob:track"),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      Object.defineProperty(this, "paused", { configurable: true, value: false });
+      this.dispatchEvent(new Event("play"));
+      return Promise.resolve();
+    });
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    await player.playAt(0);
+    await library.selectFolder();
+    expect(vi.spyOn(first, "isSameEntry")).toHaveBeenCalledWith(second);
+    expect(player).toMatchObject({ index: 0, playing: true });
+    expect(player.current?.path).toBe("song.mp3");
+    player.$dispose();
+  });
+
+  it("フォルダー保存の遅延が新しい選択の保存を上書きしない", async () => {
+    const a = folder("granted");
+    const b = folder("granted");
+    a.isSameEntry = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValueOnce(a).mockResolvedValueOnce(b));
+    vi.mocked(scanDirectory).mockResolvedValue([]);
+    const saving = deferred<IDBValidKey>();
+    vi.mocked(saveDirectory)
+      .mockReturnValueOnce(saving.promise)
+      .mockResolvedValueOnce("music-directory");
+    const library = useLibraryStore();
+    const first = library.selectFolder();
+    await vi.waitFor(() => expect(saveDirectory).toHaveBeenCalledWith(a));
+    const second = library.selectFolder();
+    await vi.waitFor(() => expect(library.directory).toBe(b));
+    expect(saveDirectory).toHaveBeenCalledTimes(1);
+    saving.resolve("music-directory");
+    await Promise.all([first, second]);
+    expect(vi.mocked(saveDirectory).mock.calls.map(([saved]) => saved)).toEqual([a, b]);
+  });
+});

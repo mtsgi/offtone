@@ -25,6 +25,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const track = state.tracks[state.index];
     if (track && typeof MediaMetadata !== "undefined") {
       navigator.mediaSession.metadata = new MediaMetadata({ title: track.name, artist: "offtone" });
+    } else if (!track) {
+      navigator.mediaSession.metadata = null;
     }
   }
 
@@ -65,6 +67,17 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     update({ tracks, index: -1, playing: false, error: "" });
   }
 
+  /** 同じフォルダーの更新を、現在の音源を維持して反映する。 */
+  function updateTracks(tracks: Track[]): void {
+    const current = state.tracks[state.index];
+    const index = current ? tracks.findIndex((track) => track.path === current.path) : -1;
+    if (current && index < 0) {
+      setTracks(tracks);
+      return;
+    }
+    update({ tracks, index });
+  }
+
   /** 指定した曲を再生し、読み取れない曲や未対応の曲を飛ばす。 */
   async function playAt(target: number): Promise<void> {
     if (disposed || target < 0 || target >= state.tracks.length) return;
@@ -100,6 +113,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
         }
         clearSource();
         update({ playing: false, error: `「${track.name}」を再生できませんでした。` });
+        // 読み取り待ちの間にキューが並び替わっていても現在曲の次から進む。
+        nextIndex = state.index;
       }
     }
     if (run === generation) {
@@ -223,5 +238,5 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     }
   }
 
-  return { getState, subscribe, setTracks, playAt, toggle, previous, next, dispose };
+  return { getState, subscribe, setTracks, updateTracks, playAt, toggle, previous, next, dispose };
 }

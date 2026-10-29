@@ -18,79 +18,139 @@ export const useLibraryStore = defineStore("library", () => {
   const busy = ref(false);
   const needsPermission = ref(false);
   const supported = "showDirectoryPicker" in window;
+  // キューに反映済みのルート。名前だけでは別フォルダーを区別できない。
+  let queueDirectory: MusicDirectory | undefined;
+  let generation = 0;
+  let saves: Promise<void> = Promise.resolve();
+
+  function begin(): number {
+    const run = ++generation;
+    busy.value = true;
+    status.value = "";
+    return run;
+  }
+
+  async function scan(selected: MusicDirectory, run: number): Promise<boolean> {
+    try {
+      const found = await scanDirectory(selected);
+      if (run !== generation) return false;
+      const same =
+        queueDirectory === selected ||
+        (queueDirectory !== undefined && (await queueDirectory.isSameEntry(selected)));
+      if (run !== generation) return false;
+      if (same) player.updateTracks(found);
+      else player.setTracks(found);
+      queueDirectory = selected;
+      directory.value = selected;
+      folderName.value = selected.name;
+      needsPermission.value = false;
+      return true;
+    } catch (cause) {
+      if (run === generation) {
+        if (
+          selected === directory.value &&
+          cause instanceof DOMException &&
+          cause.name === "NotAllowedError"
+        ) {
+          needsPermission.value = true;
+        }
+        status.value = "フォルダーを読み込めませんでした。もう一度お試しください。";
+      }
+      return false;
+    }
+  }
 
   /** 現在のフォルダーを読み込み、再生キューを更新する。 */
   async function refresh(): Promise<void> {
-    if (!directory.value) return;
-    busy.value = true;
-    status.value = "";
+    const selected = directory.value;
+    if (!selected) return;
+    const run = begin();
     try {
-      const found = await scanDirectory(directory.value);
-      player.setTracks(found);
-      folderName.value = directory.value.name;
-      needsPermission.value = false;
-    } catch {
-      status.value = "フォルダーを読み込めませんでした。もう一度選択してください。";
+      await scan(selected, run);
     } finally {
-      busy.value = false;
+      if (run === generation) busy.value = false;
     }
   }
 
   /** ユーザーが選択した音楽フォルダーへのアクセスを要求する。 */
   async function selectFolder(): Promise<void> {
     if (!supported) return;
+    const run = begin();
     try {
       const picker = window as unknown as Window & {
         showDirectoryPicker(options: { mode: "read" }): Promise<MusicDirectory>;
       };
       const selected = await picker.showDirectoryPicker({ mode: "read" });
-      directory.value = selected;
-      let saved = true;
+      if (run !== generation || !(await scan(selected, run))) return;
+      // 保存要求を直列化し、遅い古い書き込みが新しい選択を上書きしないようにする。
+      saves = saves
+        .catch(() => {})
+        .then(async () => {
+          await saveDirectory(selected);
+        });
       try {
-        await saveDirectory(selected);
+        await saves;
       } catch {
-        saved = false;
-      }
-      await refresh();
-      if (!saved && !status.value) {
-        status.value = "フォルダーを記憶できませんでした。次回は再選択してください。";
+        if (run === generation) {
+          status.value = "フォルダーを記憶できませんでした。次回は再選択してください。";
+        }
       }
     } catch (cause) {
-      if (!(cause instanceof DOMException && cause.name === "AbortError")) {
+      if (run === generation && !(cause instanceof DOMException && cause.name === "AbortError")) {
         status.value = "フォルダーを開けませんでした。別のフォルダーを選んでください。";
       }
+    } finally {
+      if (run === generation) busy.value = false;
     }
   }
 
   /** 保存済みのフォルダーに対する読み取り権限を再要求する。 */
   async function restorePermission(): Promise<void> {
-    if (!directory.value) return;
+    const selected = directory.value;
+    if (!selected) return;
+    const run = begin();
     try {
-      if ((await requestDirectoryPermission(directory.value)) === "granted") {
-        await refresh();
+      const permission = await requestDirectoryPermission(selected);
+      if (run !== generation) return;
+      if (permission === "granted") {
+        await scan(selected, run);
       } else {
+        needsPermission.value = true;
         status.value = "フォルダーへのアクセスが許可されませんでした。";
       }
     } catch {
-      status.value = "フォルダーにアクセスできません。もう一度選択してください。";
+      if (run === generation)
+        status.value = "フォルダーにアクセスできません。もう一度選択してください。";
+    } finally {
+      if (run === generation) busy.value = false;
     }
   }
 
   /** 保存済みのフォルダーがあれば、権限を確認して復元する。 */
   async function restore(): Promise<void> {
     if (!supported) return;
+    const run = begin();
     try {
       const saved = await loadDirectory();
-      if (!saved) return;
-      directory.value = saved;
-      folderName.value = saved.name;
-      if ((await queryDirectoryPermission(saved)) === "granted") {
-        await refresh();
+      if (run !== generation || !saved) return;
+      const permission = await queryDirectoryPermission(saved);
+      if (run !== generation) return;
+      if (permission === "granted") {
+        if (!directory.value) {
+          directory.value = saved;
+          folderName.value = saved.name;
+        }
+        await scan(saved, run);
       } else {
+        directory.value = saved;
+        folderName.value = saved.name;
         needsPermission.value = true;
       }
     } catch {
-      status.value = "前回のフォルダーを復元できませんでした。もう一度選択してください。";
+      if (run === generation)
+        status.value = "前回のフォルダーを復元できませんでした。もう一度選択してください。";
+    } finally {
+      if (run === generation) busy.value = false;
     }
   }
 
