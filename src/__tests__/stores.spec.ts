@@ -16,9 +16,9 @@ vi.mock("../lib/storage", () => ({
     directory.requestPermission({ mode: "read" }),
 }));
 
-function folder(permission: PermissionState): MusicDirectory {
+function folder(permission: PermissionState, name = "Music"): MusicDirectory {
   return {
-    name: "Music",
+    name,
     queryPermission: vi.fn().mockResolvedValue(permission),
     requestPermission: vi.fn().mockResolvedValue("granted"),
   } as unknown as MusicDirectory;
@@ -313,5 +313,57 @@ describe("ライブラリ更新の競合", () => {
     saving.resolve("music-directory");
     await Promise.all([first, second]);
     expect(vi.mocked(saveDirectory).mock.calls.map(([saved]) => saved)).toEqual([a, b]);
+  });
+  it("新しく選択したフォルダーの権限失効後、元のキューを保持して再許可・保存する", async () => {
+    const original = folder("granted", "Original");
+    const selected = folder("granted", "New");
+    original.isSameEntry = vi.fn().mockResolvedValue(false);
+    vi.stubGlobal(
+      "showDirectoryPicker",
+      vi.fn().mockResolvedValueOnce(original).mockResolvedValueOnce(selected),
+    );
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory)
+      .mockResolvedValueOnce([playable("original.mp3")])
+      .mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"))
+      .mockResolvedValueOnce([playable("new.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    await library.selectFolder();
+    expect(library.directory).toBe(original);
+    expect(library.folderName).toBe("Original");
+    expect(library.permissionFolderName).toBe("New");
+    expect(library.needsPermission).toBe(true);
+    expect(player.tracks[0]?.name).toBe("original.mp3");
+    expect(saveDirectory).toHaveBeenCalledTimes(1);
+    await library.restorePermission();
+    expect(vi.spyOn(selected, "requestPermission")).toHaveBeenCalledWith({ mode: "read" });
+    expect(library.directory).toBe(selected);
+    expect(library.folderName).toBe("New");
+    expect(library.needsPermission).toBe(false);
+    expect(player.tracks[0]?.name).toBe("new.mp3");
+    expect(vi.mocked(saveDirectory).mock.calls.map(([saved]) => saved)).toEqual([
+      original,
+      selected,
+    ]);
+  });
+
+  it("初回のフォルダー選択で権限が失効しても再許可できる", async () => {
+    const selected = folder("granted", "New");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(saveDirectory).mockResolvedValue("music-directory");
+    vi.mocked(scanDirectory)
+      .mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"))
+      .mockResolvedValueOnce([playable("new.mp3")]);
+    const library = useLibraryStore();
+    await library.selectFolder();
+    expect(library.directory).toBeUndefined();
+    expect(library.needsPermission).toBe(true);
+    expect(library.permissionFolderName).toBe("New");
+    await library.restorePermission();
+    expect(library.directory).toBe(selected);
+    expect(library.needsPermission).toBe(false);
+    expect(saveDirectory).toHaveBeenCalledWith(selected);
   });
 });

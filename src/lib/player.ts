@@ -75,7 +75,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       setTracks(tracks);
       return;
     }
-    update({ tracks, index });
+    // 再生中に残った過去のエラーは更新時に解除する。停止中の再試行案内は保持する。
+    update({ tracks, index, error: state.playing ? "" : state.error });
   }
 
   /** 指定した曲を再生し、読み取れない曲や未対応の曲を飛ばす。 */

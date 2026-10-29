@@ -1,4 +1,4 @@
-import { ref, shallowRef } from "vue";
+import { computed, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { scanDirectory, type MusicDirectory } from "../lib/library";
 import {
@@ -17,6 +17,8 @@ export const useLibraryStore = defineStore("library", () => {
   const status = ref("");
   const busy = ref(false);
   const needsPermission = ref(false);
+  const permissionDirectory = shallowRef<MusicDirectory>();
+  const permissionFolderName = computed(() => permissionDirectory.value?.name ?? folderName.value);
   const supported = "showDirectoryPicker" in window;
   // キューに反映済みのルート。名前だけでは別フォルダーを区別できない。
   let queueDirectory: MusicDirectory | undefined;
@@ -44,19 +46,33 @@ export const useLibraryStore = defineStore("library", () => {
       directory.value = selected;
       folderName.value = selected.name;
       needsPermission.value = false;
+      permissionDirectory.value = undefined;
       return true;
     } catch (cause) {
       if (run === generation) {
-        if (
-          selected === directory.value &&
-          cause instanceof DOMException &&
-          cause.name === "NotAllowedError"
-        ) {
+        if (cause instanceof DOMException && cause.name === "NotAllowedError") {
+          permissionDirectory.value = selected;
           needsPermission.value = true;
         }
         status.value = "フォルダーを読み込めませんでした。もう一度お試しください。";
       }
       return false;
+    }
+  }
+
+  async function saveSelection(selected: MusicDirectory, run: number): Promise<void> {
+    // 保存要求を直列化し、遅い古い書き込みが新しい選択を上書きしないようにする。
+    saves = saves
+      .catch(() => {})
+      .then(async () => {
+        await saveDirectory(selected);
+      });
+    try {
+      await saves;
+    } catch {
+      if (run === generation) {
+        status.value = "フォルダーを記憶できませんでした。次回は再選択してください。";
+      }
     }
   }
 
@@ -82,19 +98,7 @@ export const useLibraryStore = defineStore("library", () => {
       };
       const selected = await picker.showDirectoryPicker({ mode: "read" });
       if (run !== generation || !(await scan(selected, run))) return;
-      // 保存要求を直列化し、遅い古い書き込みが新しい選択を上書きしないようにする。
-      saves = saves
-        .catch(() => {})
-        .then(async () => {
-          await saveDirectory(selected);
-        });
-      try {
-        await saves;
-      } catch {
-        if (run === generation) {
-          status.value = "フォルダーを記憶できませんでした。次回は再選択してください。";
-        }
-      }
+      await saveSelection(selected, run);
     } catch (cause) {
       if (run === generation && !(cause instanceof DOMException && cause.name === "AbortError")) {
         status.value = "フォルダーを開けませんでした。別のフォルダーを選んでください。";
@@ -106,14 +110,18 @@ export const useLibraryStore = defineStore("library", () => {
 
   /** 保存済みのフォルダーに対する読み取り権限を再要求する。 */
   async function restorePermission(): Promise<void> {
-    const selected = directory.value;
+    const selected = permissionDirectory.value ?? directory.value;
     if (!selected) return;
+    const saveAfterRecovery =
+      permissionDirectory.value === selected && selected !== directory.value;
     const run = begin();
     try {
       const permission = await requestDirectoryPermission(selected);
       if (run !== generation) return;
       if (permission === "granted") {
-        await scan(selected, run);
+        if (await scan(selected, run)) {
+          if (saveAfterRecovery) await saveSelection(selected, run);
+        }
       } else {
         needsPermission.value = true;
         status.value = "フォルダーへのアクセスが許可されませんでした。";
@@ -144,6 +152,7 @@ export const useLibraryStore = defineStore("library", () => {
       } else {
         directory.value = saved;
         folderName.value = saved.name;
+        permissionDirectory.value = saved;
         needsPermission.value = true;
       }
     } catch {
@@ -160,6 +169,7 @@ export const useLibraryStore = defineStore("library", () => {
     status,
     busy,
     needsPermission,
+    permissionFolderName,
     supported,
     refresh,
     selectFolder,

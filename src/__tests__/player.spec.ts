@@ -372,4 +372,27 @@ describe("queue refresh", () => {
     expect(player.getState()).toMatchObject({ index: -1, playing: false });
     player.dispose();
   });
+  it("clears a past playback error on refresh while playing but preserves a retry prompt", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setTracks([track("broken.mp3", true), track("good.mp3")]);
+    await player.playAt(0);
+    expect(player.getState().error).toContain("broken.mp3");
+    player.updateTracks([track("good.mp3")]);
+    expect(player.getState()).toMatchObject({ index: 0, playing: true, error: "" });
+    player.dispose();
+
+    const blockedAudio = audioElement();
+    vi.spyOn(blockedAudio, "play").mockRejectedValueOnce(
+      new DOMException("blocked", "NotAllowedError"),
+    );
+    const blocked = createPlayer(blockedAudio);
+    blocked.setTracks([track("good.mp3")]);
+    await blocked.playAt(0);
+    blocked.updateTracks([track("good.mp3")]);
+    expect(blocked.getState().error).toContain("再生ボタン");
+    await blocked.toggle();
+    expect(blocked.getState().playing).toBe(true);
+    blocked.dispose();
+  });
 });
