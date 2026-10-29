@@ -25,3 +25,5 @@ vp run build
 Vue Vapor モードと Nuxt UI を併用しています。
 
 フォルダー選択には HTTPS または localhost と、File System Access API に対応する Chrome が必要です。
+
+Android でのバックグラウンド再生、ロック画面・Bluetooth 操作は実機での検証が必要です。OS や Chrome の省電力・音声フォーカス、ファイル形式、フォルダー権限により動作が異なる可能性があります。検証手順と結果の記録には [Android 実機検証](docs/compatibility.md) を参照してください。

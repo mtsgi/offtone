@@ -233,9 +233,11 @@ describe("player", () => {
     Object.defineProperty(navigator, "mediaSession", { configurable: true, value: mediaSession });
     try {
       const player = createPlayer(audioElement());
+      expect([...handlers.keys()]).toEqual(["play", "pause", "previoustrack", "nexttrack"]);
       player.setTracks([track("one.mp3"), track("two.mp3")]);
       await player.playAt(0);
       expect(mediaSession.playbackState).toBe("playing");
+      expect(mediaSession.metadata).toMatchObject({ init: { title: "one.mp3" } });
       handlers.get("nexttrack")?.({ action: "nexttrack" });
       await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 1, playing: true }));
       handlers.get("pause")?.({ action: "pause" });

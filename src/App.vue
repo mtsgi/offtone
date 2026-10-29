@@ -4,6 +4,7 @@ import { onMounted } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
+import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
 import { useLibraryStore } from "./stores/library";
 
 const library = useLibraryStore();
@@ -18,6 +19,7 @@ onMounted(() => {
     <div class="flex min-h-dvh flex-col">
       <FolderHeader />
       <MusicLibrary />
+      <DiagnosticsPanel />
       <PlaybackBar />
     </div>
   </UApp>
