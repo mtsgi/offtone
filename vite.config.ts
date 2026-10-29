@@ -39,7 +39,7 @@ export default defineConfig({
     }),
     VitePWA({
       injectRegister: false,
-      registerType: "autoUpdate",
+      registerType: "prompt",
       includeAssets: ["icons/*.png"],
       manifest: {
         lang: "ja",
