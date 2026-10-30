@@ -5,6 +5,7 @@ import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
 import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
+import UpdateNotice from "./components/UpdateNotice.vue";
 import { useLibraryStore } from "./stores/library";
 
 const library = useLibraryStore();
@@ -18,6 +19,7 @@ onMounted(() => {
   <UApp>
     <div class="flex min-h-dvh flex-col">
       <FolderHeader />
+      <UpdateNotice />
       <MusicLibrary />
       <DiagnosticsPanel />
       <PlaybackBar />
