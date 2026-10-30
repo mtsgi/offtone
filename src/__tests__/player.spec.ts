@@ -233,7 +233,15 @@ describe("player", () => {
     Object.defineProperty(navigator, "mediaSession", { configurable: true, value: mediaSession });
     try {
       const player = createPlayer(audioElement());
-      expect([...handlers.keys()]).toEqual(["play", "pause", "previoustrack", "nexttrack"]);
+      expect([...handlers.keys()]).toEqual([
+        "play",
+        "pause",
+        "previoustrack",
+        "nexttrack",
+        "seekto",
+        "seekbackward",
+        "seekforward",
+      ]);
       player.setTracks([track("one.mp3"), track("two.mp3")]);
       await player.playAt(0);
       expect(mediaSession.playbackState).toBe("playing");
@@ -396,5 +404,182 @@ describe("queue refresh", () => {
     await blocked.toggle();
     expect(blocked.getState().playing).toBe(true);
     blocked.dispose();
+  });
+});
+
+describe("explicit queue and controls", () => {
+  it("keeps duplicate entries distinct and preserves playback on edits", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    player.setTracks([a, track("b.mp3")]);
+    await player.playAt(0);
+    const current = player.getState().currentId!;
+    player.addTrack(a);
+    const duplicate = player.getState().queue[2]!;
+    expect(duplicate.id).not.toBe(current);
+    player.moveQueue(2, 0);
+    player.removeFromQueue(duplicate.id);
+    expect(player.getState()).toMatchObject({ currentId: current, playing: true });
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    player.removeFromQueue(current);
+    expect(player.getState()).toMatchObject({ currentId: null, playing: false, index: -1 });
+    expect(revokeObjectURL).toHaveBeenCalledOnce();
+    player.dispose();
+  });
+
+  it("shuffles around the current entry and restores edited queue order", async () => {
+    const player = createPlayer(audioElement());
+    player.setTracks([track("a"), track("b"), track("c")]);
+    await player.playAt(1);
+    const current = player.getState().currentId;
+    player.setShuffle(true);
+    expect(player.getState().order[0]).toBe(current);
+    expect(new Set(player.getState().order).size).toBe(3);
+    player.addTrack(track("d"));
+    player.moveQueue(3, 0);
+    player.setShuffle(false);
+    expect(player.getState().order).toEqual(player.getState().queue.map((entry) => entry.id));
+    expect(player.getState()).toMatchObject({ currentId: current, playing: true });
+    player.dispose();
+  });
+
+  it("distinguishes repeat one at the end from explicit next and wraps all", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setTracks([track("a"), track("b")]);
+    await player.playAt(0);
+    player.setRepeat("one");
+    ended(audio);
+    await vi.waitFor(() => expect(vi.spyOn(audio, "play")).toHaveBeenCalledTimes(2));
+    expect(player.getState().index).toBe(0);
+    player.next();
+    await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 1, playing: true }));
+    player.setRepeat("all");
+    ended(audio);
+    await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 0, playing: true }));
+    player.setRepeat("off");
+    await player.playAt(1);
+    ended(audio);
+    expect(player.getState().playing).toBe(false);
+    player.dispose();
+  });
+
+  it("cancels a pending read when its queue entry is removed", async () => {
+    const player = createPlayer(audioElement());
+    const item = track("slow");
+    const slow = deferred<File>();
+    vi.spyOn(item.handle, "getFile").mockReturnValue(slow.promise);
+    player.setTracks([item]);
+    const pending = player.playAt(0);
+    player.removeFromQueue(player.getState().currentId!);
+    slow.resolve(new File([], "slow"));
+    await pending;
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(player.getState().currentId).toBeNull();
+    player.dispose();
+  });
+
+  it("clamps seeks and rejects invalid durations and values", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setTracks([track("a")]);
+    await player.playAt(0);
+    Object.defineProperty(audio, "duration", { configurable: true, value: Infinity });
+    audio.dispatchEvent(new Event("durationchange"));
+    player.seek(20);
+    expect(player.getState().duration).toBeNull();
+    expect(audio.currentTime).toBe(0);
+    Object.defineProperty(audio, "duration", { configurable: true, value: 100 });
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    player.seek(120);
+    expect(audio.currentTime).toBe(100);
+    player.seek(-5);
+    expect(audio.currentTime).toBe(0);
+    player.seek(NaN);
+    expect(audio.currentTime).toBe(0);
+    player.dispose();
+  });
+
+  it("visits each shuffled entry once before stopping and maintains a duplicate on refresh", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    const a = track("dir/a.mp3");
+    player.setTracks([a, track("other/a.mp3"), track("c.mp3")]);
+    player.addTrack(a);
+    await player.playAt(0);
+    player.setShuffle(true);
+    const expected = [...player.getState().order];
+    const visited = [player.getState().currentId];
+    for (let i = 1; i < expected.length; i++) {
+      ended(audio);
+      await vi.waitFor(() => expect(player.getState().currentId).toBe(expected[i]));
+      await vi.waitFor(() => expect(player.getState().playing).toBe(true));
+      visited.push(player.getState().currentId);
+    }
+    ended(audio);
+    expect(player.getState().playing).toBe(false);
+    expect(visited).toEqual(expected);
+    player.updateTracks([track("dir/a.mp3"), track("other/a.mp3"), track("c.mp3")]);
+    expect(
+      player.getState().queue.filter((entry) => entry.track.path === "dir/a.mp3"),
+    ).toHaveLength(2);
+    player.dispose();
+  });
+
+  it("ignores seeks during a pending switch and removes position listeners on disposal", async () => {
+    const audio = audioElement();
+    const remove = vi.spyOn(audio, "removeEventListener");
+    const player = createPlayer(audio);
+    const slow = deferred<File>();
+    const second = track("second");
+    vi.spyOn(second.handle, "getFile").mockReturnValue(slow.promise);
+    player.setTracks([track("first"), second]);
+    await player.playAt(0);
+    Object.defineProperty(audio, "duration", { configurable: true, value: 100 });
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    const switching = player.playAt(1);
+    player.seek(50);
+    expect(audio.currentTime).toBe(0);
+    slow.resolve(new File([], "second"));
+    await switching;
+    player.dispose();
+    for (const event of ["timeupdate", "durationchange", "loadedmetadata", "seeking", "seeked"]) {
+      expect(remove).toHaveBeenCalledWith(event, expect.any(Function));
+    }
+  });
+
+  it("routes Media Session seeking and sends finite position state", async () => {
+    const handlers = new Map<string, MediaSessionActionHandler | null>();
+    const media = {
+      playbackState: "none",
+      metadata: null,
+      setActionHandler: vi.fn((action: string, handler: MediaSessionActionHandler | null) =>
+        handlers.set(action, handler),
+      ),
+      setPositionState: vi.fn(),
+    };
+    Object.defineProperty(navigator, "mediaSession", { configurable: true, value: media });
+    try {
+      const audio = audioElement();
+      const player = createPlayer(audio);
+      player.setTracks([track("a")]);
+      await player.playAt(0);
+      Object.defineProperty(audio, "duration", { configurable: true, value: 90 });
+      audio.dispatchEvent(new Event("durationchange"));
+      handlers.get("seekto")?.({ action: "seekto", seekTime: 40 });
+      handlers.get("seekforward")?.({ action: "seekforward", seekOffset: 8 });
+      handlers.get("seekbackward")?.({ action: "seekbackward", seekOffset: 3 });
+      expect(audio.currentTime).toBe(45);
+      expect(media.setPositionState).toHaveBeenLastCalledWith({
+        duration: 90,
+        position: 45,
+        playbackRate: 1,
+      });
+      player.dispose();
+      expect([...handlers.values()].every((handler) => handler === null)).toBe(true);
+    } finally {
+      Reflect.deleteProperty(navigator, "mediaSession");
+    }
   });
 });

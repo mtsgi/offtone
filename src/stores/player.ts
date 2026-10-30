@@ -19,7 +19,18 @@ export const usePlayerStore = defineStore("player", () => {
   const index = computed(() => state.value.index);
   const playing = computed(() => state.value.playing);
   const error = computed(() => state.value.error);
-  const current = computed(() => state.value.tracks[state.value.index]);
+  const current = computed(
+    () => state.value.queue.find((entry) => entry.id === state.value.currentId)?.track,
+  );
+  const queue = computed(() => state.value.queue);
+  const order = computed(() => state.value.order);
+  const currentId = computed(() => state.value.currentId);
+  const shuffle = computed(() => state.value.shuffle);
+  const repeat = computed(() => state.value.repeat);
+  const currentTime = computed(() => state.value.currentTime);
+  const duration = computed(() => state.value.duration);
+  const seeking = computed(() => state.value.seeking);
+  const volume = computed(() => state.value.volume);
 
   return {
     tracks,
@@ -27,11 +38,28 @@ export const usePlayerStore = defineStore("player", () => {
     playing,
     error,
     current,
+    queue,
+    order,
+    currentId,
+    shuffle,
+    repeat,
+    currentTime,
+    duration,
+    seeking,
+    volume,
     setTracks: player.setTracks,
     updateTracks: player.updateTracks,
     playAt: player.playAt,
     toggle: player.toggle,
     previous: player.previous,
     next: player.next,
+    playId: player.playId,
+    setShuffle: player.setShuffle,
+    setRepeat: player.setRepeat,
+    addTrack: player.addTrack,
+    removeFromQueue: player.removeFromQueue,
+    moveQueue: player.moveQueue,
+    seek: player.seek,
+    setVolume: player.setVolume,
   };
 });
