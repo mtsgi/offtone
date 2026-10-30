@@ -1,4 +1,5 @@
 import type { Track } from "./library";
+import { diagnostics } from "./diagnostics";
 
 /** 再生サービスが公開する現在の状態。 */
 export interface PlaybackState {
@@ -18,6 +19,11 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let generation = 0;
   let pending = false;
   let disposed = false;
+
+  const currentTrack = () => state.tracks[state.index];
+  const log = (event: Parameters<typeof diagnostics.record>[0], cause?: unknown) => {
+    if (diagnostics.isEnabled()) diagnostics.record(event, audio, currentTrack(), cause);
+  };
 
   function syncMedia(): void {
     if (!("mediaSession" in navigator)) return;
@@ -82,6 +88,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   /** 指定した曲を再生し、読み取れない曲や未対応の曲を飛ばす。 */
   async function playAt(target: number): Promise<void> {
     if (disposed || target < 0 || target >= state.tracks.length) return;
+    log("play-request");
     const run = ++generation;
     pending = true;
     clearSource();
@@ -91,9 +98,12 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       const track = state.tracks[nextIndex];
       if (!track || run !== generation) return;
       update({ index: nextIndex });
+      log("track-switch");
       if (run !== generation) return;
+      let reading = true;
       try {
         const file = await track.handle.getFile();
+        reading = false;
         if (run !== generation) return;
         objectUrl = URL.createObjectURL(file);
         pending = true;
@@ -104,6 +114,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
         return;
       } catch (cause) {
         if (run !== generation) return;
+        log(reading ? "read-failure" : "play-failure", cause);
         if (objectUrl && cause instanceof DOMException && cause.name === "NotAllowedError") {
           pending = false;
           update({
@@ -143,13 +154,15 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     } else if (state.index < 0 || !audio.src) {
       await playAt(Math.max(state.index, 0));
     } else {
+      log("play-request");
       const run = ++generation;
       pending = true;
       try {
         await audio.play();
         if (run === generation) pending = false;
-      } catch {
+      } catch (cause) {
         if (run !== generation) return;
+        log("play-failure", cause);
         pending = false;
         update({ playing: false, error: "再生を開始できませんでした。もう一度お試しください。" });
       }
@@ -191,6 +204,23 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     next();
   }
 
+  const diagnosticEvents = [
+    "play",
+    "pause",
+    "ended",
+    "error",
+    "waiting",
+    "stalled",
+    "suspend",
+    "canplay",
+  ] as const;
+  const onDiagnosticEvent = (event: Event) => {
+    log(event.type as (typeof diagnosticEvents)[number]);
+  };
+  const onVisibility = () => log("visibilitychange");
+  for (const event of diagnosticEvents) audio.addEventListener(event, onDiagnosticEvent);
+  document.addEventListener("visibilitychange", onVisibility);
+
   audio.addEventListener("play", onPlay);
   audio.addEventListener("pause", onPause);
   audio.addEventListener("ended", onEnded);
@@ -200,12 +230,31 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     [
       "play",
       () => {
+        log("media-play");
         if (!state.playing && !pending) void toggle();
       },
     ],
-    ["pause", pause],
-    ["previoustrack", previous],
-    ["nexttrack", next],
+    [
+      "pause",
+      () => {
+        log("media-pause");
+        pause();
+      },
+    ],
+    [
+      "previoustrack",
+      () => {
+        log("media-previoustrack");
+        previous();
+      },
+    ],
+    [
+      "nexttrack",
+      () => {
+        log("media-nexttrack");
+        next();
+      },
+    ],
   ];
   if ("mediaSession" in navigator) {
     for (const [action, handler] of actions) {
@@ -223,6 +272,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     disposed = true;
     pending = false;
     clearSource();
+    for (const event of diagnosticEvents) audio.removeEventListener(event, onDiagnosticEvent);
+    document.removeEventListener("visibilitychange", onVisibility);
     audio.removeEventListener("play", onPlay);
     audio.removeEventListener("pause", onPause);
     audio.removeEventListener("ended", onEnded);

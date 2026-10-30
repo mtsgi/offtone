@@ -4,6 +4,7 @@ import { onMounted } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
+import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
 import UpdateNotice from "./components/UpdateNotice.vue";
 import { useLibraryStore } from "./stores/library";
 
@@ -20,6 +21,7 @@ onMounted(() => {
       <FolderHeader />
       <UpdateNotice />
       <MusicLibrary />
+      <DiagnosticsPanel />
       <PlaybackBar />
     </div>
   </UApp>
