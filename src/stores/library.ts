@@ -1,11 +1,13 @@
 import { computed, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { scanDirectory, type MusicDirectory } from "../lib/library";
+import { trackId } from "../lib/catalog";
 import {
   loadDirectory,
   saveDirectory,
   queryDirectoryPermission,
   requestDirectoryPermission,
+  StorageError,
 } from "../lib/storage";
 import { usePlayerStore } from "./player";
 
@@ -17,11 +19,13 @@ export const useLibraryStore = defineStore("library", () => {
   const status = ref("");
   const busy = ref(false);
   const needsPermission = ref(false);
+  const permissionState = ref<PermissionState | "unavailable">("prompt");
   const permissionDirectory = shallowRef<MusicDirectory>();
   const permissionFolderName = computed(() => permissionDirectory.value?.name ?? folderName.value);
   const supported = "showDirectoryPicker" in window;
   // キューに反映済みのルート。名前だけでは別フォルダーを区別できない。
   let queueDirectory: MusicDirectory | undefined;
+  let queueRootId: string | undefined;
   let generation = 0;
   let saves: Promise<void> = Promise.resolve();
 
@@ -40,8 +44,12 @@ export const useLibraryStore = defineStore("library", () => {
         queueDirectory === selected ||
         (queueDirectory !== undefined && (await queueDirectory.isSameEntry(selected)));
       if (run !== generation) return false;
+      if (same && queueRootId) {
+        for (const track of found) track.id = trackId(queueRootId, track.path);
+      }
       if (same) player.updateTracks(found);
       else player.setTracks(found);
+      if (!same) queueRootId = undefined;
       queueDirectory = selected;
       directory.value = selected;
       folderName.value = selected.name;
@@ -53,6 +61,7 @@ export const useLibraryStore = defineStore("library", () => {
         if (cause instanceof DOMException && cause.name === "NotAllowedError") {
           permissionDirectory.value = selected;
           needsPermission.value = true;
+          permissionState.value = "prompt";
         }
         status.value = "フォルダーを読み込めませんでした。もう一度お試しください。";
       }
@@ -65,13 +74,23 @@ export const useLibraryStore = defineStore("library", () => {
     saves = saves
       .catch(() => {})
       .then(async () => {
-        await saveDirectory(selected);
+        if (run !== generation) return;
+        const id = await saveDirectory(selected);
+        if (run === generation && queueDirectory === selected) {
+          queueRootId = id;
+          for (const track of player.tracks) track.id = trackId(id, track.path);
+        }
       });
     try {
       await saves;
-    } catch {
+    } catch (cause) {
       if (run === generation) {
-        status.value = "フォルダーを記憶できませんでした。次回は再選択してください。";
+        status.value =
+          cause instanceof StorageError && cause.kind === "quota"
+            ? "保存領域が不足しています。空き容量を確保してフォルダーを再選択してください。"
+            : cause instanceof StorageError && cause.kind === "blocked"
+              ? "保存の更新が別のタブで妨げられています。他のタブを閉じて再試行してください。"
+              : "フォルダーを記憶できませんでした。次回は再選択してください。";
       }
     }
   }
@@ -82,7 +101,7 @@ export const useLibraryStore = defineStore("library", () => {
     if (!selected) return;
     const run = begin();
     try {
-      await scan(selected, run);
+      if ((await scan(selected, run)) && !queueRootId) await saveSelection(selected, run);
     } finally {
       if (run === generation) busy.value = false;
     }
@@ -112,23 +131,25 @@ export const useLibraryStore = defineStore("library", () => {
   async function restorePermission(): Promise<void> {
     const selected = permissionDirectory.value ?? directory.value;
     if (!selected) return;
-    const saveAfterRecovery =
-      permissionDirectory.value === selected && selected !== directory.value;
     const run = begin();
     try {
       const permission = await requestDirectoryPermission(selected);
       if (run !== generation) return;
       if (permission === "granted") {
-        if (await scan(selected, run)) {
-          if (saveAfterRecovery) await saveSelection(selected, run);
-        }
+        if (await scan(selected, run)) await saveSelection(selected, run);
       } else {
         needsPermission.value = true;
-        status.value = "フォルダーへのアクセスが許可されませんでした。";
+        permissionState.value = permission;
+        status.value =
+          "アクセスを許可できませんでした。ブラウザーの設定を確認するか、フォルダーを選び直してください。";
       }
     } catch {
-      if (run === generation)
-        status.value = "フォルダーにアクセスできません。もう一度選択してください。";
+      if (run === generation) {
+        needsPermission.value = true;
+        permissionState.value = "unavailable";
+        status.value =
+          "このブラウザーでは再許可できない可能性があります。フォルダーを選び直してください。";
+      }
     } finally {
       if (run === generation) busy.value = false;
     }
@@ -141,6 +162,13 @@ export const useLibraryStore = defineStore("library", () => {
     try {
       const saved = await loadDirectory();
       if (run !== generation || !saved) return;
+      if (
+        typeof saved.queryPermission !== "function" ||
+        typeof saved.requestPermission !== "function"
+      ) {
+        status.value = "保存されたフォルダーを利用できません。フォルダーを選び直してください。";
+        return;
+      }
       const permission = await queryDirectoryPermission(saved);
       if (run !== generation) return;
       if (permission === "granted") {
@@ -148,16 +176,21 @@ export const useLibraryStore = defineStore("library", () => {
           directory.value = saved;
           folderName.value = saved.name;
         }
-        await scan(saved, run);
+        if (await scan(saved, run)) await saveSelection(saved, run);
       } else {
         directory.value = saved;
         folderName.value = saved.name;
         permissionDirectory.value = saved;
         needsPermission.value = true;
+        permissionState.value = permission;
       }
-    } catch {
-      if (run === generation)
-        status.value = "前回のフォルダーを復元できませんでした。もう一度選択してください。";
+    } catch (cause) {
+      if (run === generation) {
+        status.value =
+          cause instanceof StorageError && cause.kind === "blocked"
+            ? "保存データの更新が別のタブで妨げられています。他のタブを閉じて再読み込みしてください。"
+            : "前回のフォルダーを復元できませんでした。もう一度選択してください。";
+      }
     } finally {
       if (run === generation) busy.value = false;
     }
@@ -169,6 +202,7 @@ export const useLibraryStore = defineStore("library", () => {
     status,
     busy,
     needsPermission,
+    permissionState,
     permissionFolderName,
     supported,
     refresh,

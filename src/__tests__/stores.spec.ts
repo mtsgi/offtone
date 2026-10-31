@@ -8,6 +8,11 @@ import { usePlayerStore } from "../stores/player";
 vi.mock("../lib/library", () => ({ scanDirectory: vi.fn() }));
 
 vi.mock("../lib/storage", () => ({
+  StorageError: class StorageError extends Error {
+    constructor(public kind: string) {
+      super(kind);
+    }
+  },
   loadDirectory: vi.fn(),
   saveDirectory: vi.fn(),
   queryDirectoryPermission: (directory: MusicDirectory) =>
@@ -300,7 +305,7 @@ describe("ライブラリ更新の競合", () => {
     a.isSameEntry = vi.fn().mockResolvedValue(false);
     vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValueOnce(a).mockResolvedValueOnce(b));
     vi.mocked(scanDirectory).mockResolvedValue([]);
-    const saving = deferred<IDBValidKey>();
+    const saving = deferred<string>();
     vi.mocked(saveDirectory)
       .mockReturnValueOnce(saving.promise)
       .mockResolvedValueOnce("music-directory");
@@ -365,5 +370,87 @@ describe("ライブラリ更新の競合", () => {
     expect(library.directory).toBe(selected);
     expect(library.needsPermission).toBe(false);
     expect(saveDirectory).toHaveBeenCalledWith(selected);
+  });
+});
+
+describe("権限と保存の復旧", () => {
+  it("初回保存中に再スキャンしても完了後に安定 ID を割り当てる", async () => {
+    const selected = folder("granted");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    const saving = deferred<string>();
+    vi.mocked(saveDirectory).mockReturnValueOnce(saving.promise).mockResolvedValueOnce("root-id");
+    const library = useLibraryStore();
+    const first = library.selectFolder();
+    await vi.waitFor(() => expect(saveDirectory).toHaveBeenCalledWith(selected));
+    const refresh = library.refresh();
+    saving.resolve("root-id");
+    await Promise.all([first, refresh]);
+    expect(usePlayerStore().tracks[0]?.id).toBe(JSON.stringify(["root-id", "song.mp3"]));
+  });
+
+  it("granted の保存済みフォルダーを要求ダイアログなしで復元する", async () => {
+    const saved = folder("granted");
+    const request = vi.fn();
+    saved.requestPermission = request;
+    vi.mocked(loadDirectory).mockResolvedValue(saved);
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    const library = useLibraryStore();
+    await library.restore();
+    expect(request).not.toHaveBeenCalled();
+    expect(library.needsPermission).toBe(false);
+    expect(usePlayerStore().tracks[0]?.id).toBe(JSON.stringify(["root-id", "song.mp3"]));
+  });
+
+  it("denied の復元時は要求せず、操作による拒否の後に再許可できる", async () => {
+    const saved = folder("denied");
+    const request = vi.fn().mockResolvedValueOnce("denied").mockResolvedValueOnce("granted");
+    saved.requestPermission = request;
+    vi.mocked(loadDirectory).mockResolvedValue(saved);
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.restore();
+    expect(request).not.toHaveBeenCalled();
+    expect(library.permissionState).toBe("denied");
+    await library.restorePermission();
+    expect(library.needsPermission).toBe(true);
+    await library.restorePermission();
+    expect(library.needsPermission).toBe(false);
+    expect(player.tracks[0]?.id).toBe(JSON.stringify(["root-id", "song.mp3"]));
+  });
+
+  it("古い再許可の結果が新しいフォルダーを上書きしない", async () => {
+    const saved = folder("prompt");
+    const next = folder("granted", "Next");
+    const permission = deferred<PermissionState>();
+    saved.requestPermission = vi.fn().mockReturnValue(permission.promise);
+    vi.mocked(loadDirectory).mockResolvedValue(saved);
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(next));
+    vi.mocked(scanDirectory).mockResolvedValue([playable("next.mp3")]);
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    const library = useLibraryStore();
+    await library.restore();
+    const old = library.restorePermission();
+    await library.selectFolder();
+    permission.resolve("granted");
+    await old;
+    expect(library.directory).toBe(next);
+    expect(library.needsPermission).toBe(false);
+    expect(scanDirectory).toHaveBeenCalledTimes(1);
+  });
+
+  it("保存に失敗しても曲一覧を使え、容量不足を案内する", async () => {
+    const selected = folder("granted");
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    const { StorageError } = await import("../lib/storage");
+    vi.mocked(saveDirectory).mockRejectedValue(new StorageError("quota"));
+    const library = useLibraryStore();
+    await library.selectFolder();
+    expect(usePlayerStore().tracks[0]?.path).toBe("song.mp3");
+    expect(library.status).toContain("保存領域が不足");
   });
 });

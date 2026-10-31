@@ -27,6 +27,7 @@
     "@types/node": "^24.13.4",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/tsconfig": "^0.9.1",
+    "fake-indexeddb": "^6.2.7",
     "jsdom": "^30.0.1",
     "npm-run-all2": "^9.0.3",
     "typescript": "npm:typescript-native-bridge@latest",
