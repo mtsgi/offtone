@@ -6,8 +6,15 @@ import { usePlayerStore } from "../stores/player";
 
 const library = useLibraryStore();
 const player = usePlayerStore();
-const { directory, folderName, permissionFolderName, status, busy, needsPermission } =
-  storeToRefs(library);
+const {
+  directory,
+  folderName,
+  permissionFolderName,
+  status,
+  busy,
+  needsPermission,
+  permissionState,
+} = storeToRefs(library);
 const { tracks, index, playing, error: playerError } = storeToRefs(player);
 </script>
 
@@ -48,10 +55,20 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
       variant="soft"
       icon="i-lucide-shield-check"
       title="フォルダーへのアクセスを再許可してください"
-      :description="permissionFolderName"
+      :description="`${permissionFolderName}：${permissionState === 'denied' ? 'アクセスが拒否されています。ブラウザーの設定を確認するか、フォルダーを選び直してください。' : permissionState === 'unavailable' ? '再許可できない場合はフォルダーを選び直してください。' : 'アクセスを許可するか、フォルダーを選び直してください。'}`"
     >
       <template #actions>
-        <UButton size="sm" @click="library.restorePermission">アクセスを許可</UButton>
+        <UButton size="sm" :disabled="busy" @click="library.restorePermission"
+          >再許可を試す</UButton
+        >
+        <UButton
+          size="sm"
+          color="neutral"
+          variant="outline"
+          :disabled="busy"
+          @click="library.selectFolder"
+          >フォルダーを選び直す</UButton
+        >
       </template>
     </UAlert>
     <UAlert
