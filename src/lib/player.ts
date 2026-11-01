@@ -47,6 +47,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let pending = false;
   let disposed = false;
   let edited = false;
+  let metadataTitle: string | null | undefined;
   const currentEntry = () => state.queue.find((entry) => entry.id === state.currentId);
   const currentTrack = () => currentEntry()?.track;
   const log = (event: Parameters<typeof diagnostics.record>[0], cause?: unknown) => {
@@ -57,9 +58,13 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const media = navigator.mediaSession;
     media.playbackState = state.playing ? "playing" : "paused";
     const track = currentTrack();
-    if (track && typeof MediaMetadata !== "undefined")
+    if (track && track.name !== metadataTitle && typeof MediaMetadata !== "undefined") {
       media.metadata = new MediaMetadata({ title: track.name, artist: "offtone" });
-    else if (!track) media.metadata = null;
+      metadataTitle = track.name;
+    } else if (!track && metadataTitle !== null) {
+      media.metadata = null;
+      metadataTitle = null;
+    }
     if (typeof media.setPositionState === "function") {
       try {
         if (state.duration !== null)
@@ -142,8 +147,12 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       });
       queue.push(...tracks.filter((track) => !oldPaths.has(track.path)).map(makeEntry));
     } else {
+      const existingByPath = new Map<string, QueueEntry>();
+      for (const entry of state.queue) {
+        if (!existingByPath.has(entry.track.path)) existingByPath.set(entry.track.path, entry);
+      }
       queue = tracks.map((track) => {
-        const existing = state.queue.find((entry) => entry.track.path === track.path);
+        const existing = existingByPath.get(track.path);
         return existing ? { ...existing, track } : makeEntry(track);
       });
     }
@@ -151,11 +160,13 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     let order = state.shuffle
       ? state.order.filter((id) => ids.has(id))
       : queue.map((entry) => entry.id);
-    if (state.shuffle)
+    if (state.shuffle) {
+      const orderedIds = new Set(order);
       order = [
         ...order,
-        ...shuffled(queue.map((entry) => entry.id).filter((id) => !order.includes(id))),
+        ...shuffled(queue.map((entry) => entry.id).filter((id) => !orderedIds.has(id))),
       ];
+    }
     update({
       tracks,
       queue,

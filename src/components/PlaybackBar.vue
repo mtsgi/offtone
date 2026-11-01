@@ -1,6 +1,7 @@
 <script setup vapor lang="ts">
 import UContainer from "@nuxt/ui/components/Container.vue";
 import { storeToRefs } from "pinia";
+import { ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import type { RepeatMode } from "../lib/player";
 
@@ -18,6 +19,8 @@ const {
   volume,
 } = storeToRefs(player);
 const modes: RepeatMode[] = ["off", "all", "one"];
+const repeatLabels: Record<RepeatMode, string> = { off: "オフ", all: "全曲", one: "1曲" };
+const queueOpen = ref(false);
 function cycleRepeat() {
   player.setRepeat(modes[(modes.indexOf(repeat.value) + 1) % modes.length]!);
 }
@@ -28,6 +31,9 @@ function formatTime(time: number | null) {
 }
 function inputValue(event: Event): number {
   return Number((event.target as HTMLInputElement).value);
+}
+function onQueueToggle(event: Event): void {
+  queueOpen.value = (event.currentTarget as HTMLDetailsElement).open;
 }
 </script>
 
@@ -98,8 +104,8 @@ function inputValue(event: Event): number {
           :variant="repeat === 'off' ? 'ghost' : 'soft'"
           size="lg"
           :icon="repeat === 'one' ? 'i-lucide-repeat-1' : 'i-lucide-repeat'"
-          :aria-label="`リピート: ${repeat}`"
-          :title="`リピート: ${repeat}`"
+          :aria-label="`リピート: ${repeatLabels[repeat]}`"
+          :title="`リピート: ${repeatLabels[repeat]}`"
           @click="cycleRepeat"
         />
         <label class="flex items-center gap-2 px-2 text-xs"
@@ -115,9 +121,9 @@ function inputValue(event: Event): number {
             @input="player.setVolume(inputValue($event))"
         /></label>
       </div>
-      <details class="text-sm">
+      <details class="text-sm" @toggle="onQueueToggle">
         <summary class="cursor-pointer py-2">再生キュー ({{ queue.length }})</summary>
-        <ol class="max-h-48 overflow-y-auto">
+        <ol v-if="queueOpen" class="max-h-48 overflow-y-auto">
           <li v-for="(entry, queueIndex) in queue" :key="entry.id" class="flex items-center gap-1">
             <UButton
               class="min-w-0 flex-1 justify-start"

@@ -444,6 +444,94 @@ describe("explicit queue and controls", () => {
     player.dispose();
   });
 
+  it("moves to the previous shuffled entry and does nothing at the start or without a selection", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setTracks([track("a"), track("b"), track("c")]);
+    player.previous();
+    expect(vi.spyOn(audio, "play")).not.toHaveBeenCalled();
+
+    await player.playAt(0);
+    player.setShuffle(true);
+    const order = player.getState().order;
+    player.previous();
+    expect(vi.spyOn(audio, "play")).toHaveBeenCalledTimes(1);
+    player.next();
+    await vi.waitFor(() =>
+      expect(player.getState()).toMatchObject({ currentId: order[1], playing: true }),
+    );
+    player.previous();
+    await vi.waitFor(() =>
+      expect(player.getState()).toMatchObject({ currentId: order[0], playing: true }),
+    );
+    expect(vi.spyOn(audio, "play")).toHaveBeenCalledTimes(3);
+    player.dispose();
+  });
+
+  it("clamps volume and ignores non-finite inputs", () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    player.setVolume(0.4);
+    player.setVolume(NaN);
+    player.setVolume(Infinity);
+    expect(audio.volume).toBe(0.4);
+    expect(player.getState().volume).toBe(0.4);
+    player.setVolume(1.5);
+    expect(audio.volume).toBe(1);
+    expect(player.getState().volume).toBe(1);
+    player.setVolume(-1);
+    expect(audio.volume).toBe(0);
+    expect(player.getState().volume).toBe(0);
+    player.dispose();
+  });
+
+  it("updates Media Session metadata only when the title changes while position continues updating", async () => {
+    const media = {
+      playbackState: "none",
+      metadata: null as MediaMetadata | null,
+      setActionHandler: vi.fn(),
+      setPositionState: vi.fn(),
+    };
+    const metadataSet = vi.spyOn(media, "metadata", "set");
+    Object.defineProperty(navigator, "mediaSession", { configurable: true, value: media });
+    vi.stubGlobal(
+      "MediaMetadata",
+      class {
+        constructor(public init: MediaMetadataInit) {}
+      },
+    );
+    try {
+      const audio = audioElement();
+      const player = createPlayer(audio);
+      player.setTracks([track("a"), track("b")]);
+      await player.playAt(0);
+      metadataSet.mockClear();
+      media.setPositionState.mockClear();
+      Object.defineProperty(audio, "duration", { configurable: true, value: 90 });
+      audio.currentTime = 10;
+      audio.dispatchEvent(new Event("timeupdate"));
+      audio.currentTime = 20;
+      audio.dispatchEvent(new Event("timeupdate"));
+      expect(metadataSet).not.toHaveBeenCalled();
+      expect(media.setPositionState).toHaveBeenLastCalledWith({
+        duration: 90,
+        position: 20,
+        playbackRate: 1,
+      });
+      await player.playAt(1);
+      expect(metadataSet).toHaveBeenCalledTimes(1);
+      expect(metadataSet).toHaveBeenLastCalledWith(
+        expect.objectContaining({ init: { title: "b", artist: "offtone" } }),
+      );
+      player.setTracks([]);
+      expect(metadataSet).toHaveBeenLastCalledWith(null);
+      player.dispose();
+    } finally {
+      Reflect.deleteProperty(navigator, "mediaSession");
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("distinguishes repeat one at the end from explicit next and wraps all", async () => {
     const audio = audioElement();
     const player = createPlayer(audio);
