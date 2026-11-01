@@ -187,9 +187,11 @@ export const useLibraryStore = defineStore("library", () => {
     } catch (cause) {
       if (run === generation) {
         status.value =
-          cause instanceof StorageError && cause.kind === "blocked"
-            ? "保存データの更新が別のタブで妨げられています。他のタブを閉じて再読み込みしてください。"
-            : "前回のフォルダーを復元できませんでした。もう一度選択してください。";
+          cause instanceof StorageError && cause.kind === "quota"
+            ? "保存領域が不足しています。空き容量を確保してから再読み込みしてください。"
+            : cause instanceof StorageError && cause.kind === "blocked"
+              ? "保存データの更新が別のタブで妨げられています。他のタブを閉じて再読み込みしてください。"
+              : "前回のフォルダーを復元できませんでした。もう一度選択してください。";
       }
     } finally {
       if (run === generation) busy.value = false;

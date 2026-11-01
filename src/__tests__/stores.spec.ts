@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPinia, setActivePinia } from "pinia";
 import { scanDirectory, type MusicDirectory, type Track } from "../lib/library";
-import { loadDirectory, saveDirectory } from "../lib/storage";
+import { loadDirectory, saveDirectory, StorageError } from "../lib/storage";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 
@@ -374,6 +374,32 @@ describe("ライブラリ更新の競合", () => {
 });
 
 describe("権限と保存の復旧", () => {
+  it.each([
+    ["quota", "空き容量を確保"],
+    ["blocked", "他のタブを閉じて"],
+  ] as const)("復元中の %s エラーを案内し、再試行で復旧する", async (kind, guidance) => {
+    const saved = folder("granted");
+    vi.mocked(loadDirectory)
+      .mockRejectedValueOnce(new StorageError(kind))
+      .mockResolvedValueOnce(saved);
+    vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    player.setTracks([playable("existing.mp3")]);
+
+    await library.restore();
+    expect(library.status).toContain(guidance);
+    expect(library.status).toContain("再読み込み");
+    expect(library.busy).toBe(false);
+    expect(player.tracks[0]?.path).toBe("existing.mp3");
+    expect(scanDirectory).not.toHaveBeenCalled();
+
+    await library.restore();
+    expect(library.status).toBe("");
+    expect(player.tracks[0]?.path).toBe("song.mp3");
+  });
+
   it("初回保存中に再スキャンしても完了後に安定 ID を割り当てる", async () => {
     const selected = folder("granted");
     vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
@@ -446,7 +472,6 @@ describe("権限と保存の復旧", () => {
     const selected = folder("granted");
     vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
     vi.mocked(scanDirectory).mockResolvedValue([playable("song.mp3")]);
-    const { StorageError } = await import("../lib/storage");
     vi.mocked(saveDirectory).mockRejectedValue(new StorageError("quota"));
     const library = useLibraryStore();
     await library.selectFolder();
