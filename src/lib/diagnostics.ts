@@ -18,6 +18,10 @@ type EventName =
   | "media-pause"
   | "media-previoustrack"
   | "media-nexttrack"
+  | "seek"
+  | "media-seekto"
+  | "media-seekbackward"
+  | "media-seekforward"
   | "marker";
 
 type ErrorName =
