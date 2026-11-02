@@ -34,6 +34,8 @@ export interface TrackRecord extends FileFingerprint {
   path: string;
   metadata?: TrackMetadata;
   metadataVersion?: number;
+  /** Bounded thumbnail, never the original image or audio. */
+  artwork?: Blob;
 }
 
 export function fileChanged(previous: FileFingerprint, current: FileFingerprint): boolean {

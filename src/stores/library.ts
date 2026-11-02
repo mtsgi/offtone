@@ -1,7 +1,9 @@
-import { computed, ref, shallowRef } from "vue";
+import { computed, onScopeDispose, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { scanDirectory, type MusicDirectory } from "../lib/library";
-import { trackId } from "../lib/catalog";
+import { metadataIsValid, trackId, type TrackRecord } from "../lib/catalog";
+import { MetadataWorker } from "../lib/metadata-worker";
+import { deleteTrack, getTrack, listTrackIds, putTrack } from "../lib/storage";
 import {
   loadDirectory,
   saveDirectory,
@@ -28,8 +30,123 @@ export const useLibraryStore = defineStore("library", () => {
   let queueRootId: string | undefined;
   let generation = 0;
   let saves: Promise<void> = Promise.resolve();
+  const analysis = ref({ active: false, done: 0, total: 0 });
+  const analysisStatus = ref("");
+  const analysisCancelled = ref(false);
+  const worker = new MetadataWorker();
+  let analysisRun = 0;
+  let abort = new AbortController();
+  const artworkUrls = new Map<string, string>();
+  const parserVersion = 1;
+
+  function cancelAnalysis(): void {
+    if (analysis.value.active) analysisCancelled.value = true;
+    analysisRun++;
+    abort.abort();
+    worker.stop();
+    analysis.value = { ...analysis.value, active: false };
+  }
+  function clearArtwork(): void {
+    for (const url of artworkUrls.values()) URL.revokeObjectURL(url);
+    artworkUrls.clear();
+  }
+  onScopeDispose(() => {
+    cancelAnalysis();
+    clearArtwork();
+  });
+
+  async function analyze(): Promise<void> {
+    cancelAnalysis();
+    const run = analysisRun;
+    abort = new AbortController();
+    const signal = abort.signal;
+    const tracks = [...player.tracks];
+    const rootId = queueRootId;
+    analysisStatus.value = "";
+    analysisCancelled.value = false;
+    analysis.value = { active: true, done: 0, total: tracks.length };
+    if (typeof Worker === "undefined") {
+      analysisStatus.value = "このブラウザーではタグ解析を利用できません。ファイル名を表示します。";
+      analysis.value.active = false;
+      return;
+    }
+    for (const track of tracks) {
+      if (run !== analysisRun) return;
+      try {
+        const file = await track.handle.getFile();
+        if (run !== analysisRun) return;
+        const id = rootId ? trackId(rootId, track.path) : undefined;
+        let cached: TrackRecord | undefined;
+        if (id) {
+          try {
+            cached = await getTrack(id);
+          } catch {
+            analysisStatus.value = "タグのキャッシュを読み込めませんでした。";
+          }
+        }
+        if (run !== analysisRun) return;
+        let record: TrackRecord;
+        if (cached && metadataIsValid(cached, file, parserVersion)) record = cached;
+        else {
+          const result = await worker.parse(file);
+          if (run !== analysisRun) return;
+          record = {
+            id: id ?? track.path,
+            rootId: rootId ?? "",
+            path: track.path,
+            size: file.size,
+            lastModified: file.lastModified,
+            metadataVersion: parserVersion,
+            metadata: result.metadata,
+            artwork: result.artwork,
+          };
+          if (result.artwork) record.metadata!.artworkRef = record.id;
+          if (id) {
+            try {
+              await putTrack(record, signal);
+            } catch {
+              if (run === analysisRun)
+                analysisStatus.value =
+                  "タグを保存できませんでした。空き容量やブラウザーの設定を確認してください。";
+            }
+          }
+        }
+        if (run !== analysisRun) return;
+        const old = artworkUrls.get(track.path);
+        const url = record.artwork ? URL.createObjectURL(record.artwork) : undefined;
+        if (url) artworkUrls.set(track.path, url);
+        else artworkUrls.delete(track.path);
+        player.updateTrackMetadata(track, record.metadata, url);
+        if (old) URL.revokeObjectURL(old);
+      } catch {
+        // Do not display stale tags when a changed file cannot be parsed.
+        if (run !== analysisRun) return;
+        const old = artworkUrls.get(track.path);
+        artworkUrls.delete(track.path);
+        player.updateTrackMetadata(track);
+        if (old) URL.revokeObjectURL(old);
+      }
+      if (run === analysisRun)
+        analysis.value = { ...analysis.value, done: analysis.value.done + 1 };
+    }
+    if (run === analysisRun && rootId) {
+      try {
+        const present = new Set(tracks.map((track) => trackId(rootId, track.path)));
+        const ids = await listTrackIds(rootId);
+        for (const id of ids) {
+          if (run !== analysisRun) return;
+          if (typeof id === "string" && !present.has(id)) await deleteTrack(id, signal);
+        }
+      } catch {
+        if (run === analysisRun)
+          analysisStatus.value = "古いタグキャッシュを整理できませんでした。";
+      }
+    }
+    if (run === analysisRun) analysis.value = { ...analysis.value, active: false };
+  }
 
   function begin(): number {
+    cancelAnalysis();
     const run = ++generation;
     busy.value = true;
     status.value = "";
@@ -44,11 +161,28 @@ export const useLibraryStore = defineStore("library", () => {
         queueDirectory === selected ||
         (queueDirectory !== undefined && (await queueDirectory.isSameEntry(selected)));
       if (run !== generation) return false;
+      if (same) {
+        const previous = new Map(player.tracks.map((track) => [track.path, track]));
+        for (const track of found) {
+          const old = previous.get(track.path);
+          if (old) {
+            track.metadata = old.metadata;
+            track.artworkUrl = old.artworkUrl;
+          }
+        }
+      } else clearArtwork();
       if (same && queueRootId) {
         for (const track of found) track.id = trackId(queueRootId, track.path);
       }
       if (same) player.updateTracks(found);
       else player.setTracks(found);
+      const paths = new Set(found.map((track) => track.path));
+      for (const [path, url] of artworkUrls) {
+        if (!paths.has(path)) {
+          URL.revokeObjectURL(url);
+          artworkUrls.delete(path);
+        }
+      }
       if (!same) queueRootId = undefined;
       queueDirectory = selected;
       directory.value = selected;
@@ -101,7 +235,10 @@ export const useLibraryStore = defineStore("library", () => {
     if (!selected) return;
     const run = begin();
     try {
-      if ((await scan(selected, run)) && !queueRootId) await saveSelection(selected, run);
+      if (await scan(selected, run)) {
+        if (!queueRootId) await saveSelection(selected, run);
+        if (run === generation) void analyze();
+      }
     } finally {
       if (run === generation) busy.value = false;
     }
@@ -118,6 +255,7 @@ export const useLibraryStore = defineStore("library", () => {
       const selected = await picker.showDirectoryPicker({ mode: "read" });
       if (run !== generation || !(await scan(selected, run))) return;
       await saveSelection(selected, run);
+      if (run === generation) void analyze();
     } catch (cause) {
       if (run === generation && !(cause instanceof DOMException && cause.name === "AbortError")) {
         status.value = "フォルダーを開けませんでした。別のフォルダーを選んでください。";
@@ -136,7 +274,10 @@ export const useLibraryStore = defineStore("library", () => {
       const permission = await requestDirectoryPermission(selected);
       if (run !== generation) return;
       if (permission === "granted") {
-        if (await scan(selected, run)) await saveSelection(selected, run);
+        if (await scan(selected, run)) {
+          await saveSelection(selected, run);
+          if (run === generation) void analyze();
+        }
       } else {
         needsPermission.value = true;
         permissionState.value = permission;
@@ -176,7 +317,10 @@ export const useLibraryStore = defineStore("library", () => {
           directory.value = saved;
           folderName.value = saved.name;
         }
-        if (await scan(saved, run)) await saveSelection(saved, run);
+        if (await scan(saved, run)) {
+          await saveSelection(saved, run);
+          if (run === generation) void analyze();
+        }
       } else {
         directory.value = saved;
         folderName.value = saved.name;
@@ -207,6 +351,11 @@ export const useLibraryStore = defineStore("library", () => {
     permissionState,
     permissionFolderName,
     supported,
+    analysis,
+    analysisStatus,
+    analysisCancelled,
+    cancelAnalysis,
+    analyze,
     refresh,
     selectFolder,
     restorePermission,

@@ -79,14 +79,24 @@ async function transaction<T>(
   stores: string[],
   mode: IDBTransactionMode,
   action: (tx: IDBTransaction) => IDBRequest<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   const db = await openDatabase();
   return new Promise((resolve, reject) => {
     let tx: IDBTransaction | undefined;
     let request: IDBRequest<T>;
     let requestError: DOMException | null = null;
+    const onAbort = () => {
+      try {
+        tx?.abort();
+      } catch {
+        /* already complete */
+      }
+    };
     try {
+      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
       tx = db.transaction(stores, mode);
+      signal?.addEventListener("abort", onAbort, { once: true });
       request = action(tx);
       const activeTransaction = tx;
       tx.addEventListener("error", (event) => {
@@ -98,15 +108,18 @@ async function transaction<T>(
       } catch {
         // トランザクションが既に終了していればそのまま報告する。
       }
+      signal?.removeEventListener("abort", onAbort);
       db.close();
       reject(storageError(cause));
       return;
     }
     tx.oncomplete = () => {
+      signal?.removeEventListener("abort", onAbort);
       db.close();
       resolve(request.result);
     };
     tx.onabort = () => {
+      signal?.removeEventListener("abort", onAbort);
       db.close();
       reject(storageError(requestError ?? tx.error));
     };
@@ -160,12 +173,18 @@ export function getTrack(id: TrackId): Promise<TrackRecord | undefined> {
   return transaction([TRACKS], "readonly", (tx) => tx.objectStore(TRACKS).get(id));
 }
 
-export function putTrack(record: TrackRecord): Promise<IDBValidKey> {
-  return transaction([TRACKS], "readwrite", (tx) => tx.objectStore(TRACKS).put(record));
+export function putTrack(record: TrackRecord, signal?: AbortSignal): Promise<IDBValidKey> {
+  return transaction([TRACKS], "readwrite", (tx) => tx.objectStore(TRACKS).put(record), signal);
 }
 
-export function deleteTrack(id: TrackId): Promise<undefined> {
-  return transaction([TRACKS], "readwrite", (tx) => tx.objectStore(TRACKS).delete(id));
+export function listTrackIds(rootId: RootId): Promise<IDBValidKey[]> {
+  return transaction([TRACKS], "readonly", (tx) =>
+    tx.objectStore(TRACKS).index("rootId").getAllKeys(rootId),
+  );
+}
+
+export function deleteTrack(id: TrackId, signal?: AbortSignal): Promise<undefined> {
+  return transaction([TRACKS], "readwrite", (tx) => tx.objectStore(TRACKS).delete(id), signal);
 }
 
 export function queryDirectoryPermission(directory: MusicDirectory): Promise<PermissionState> {

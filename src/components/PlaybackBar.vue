@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import type { RepeatMode } from "../lib/player";
+import ArtworkImage from "./ArtworkImage.vue";
 
 const player = usePlayerStore();
 const {
@@ -43,9 +44,25 @@ function onQueueToggle(event: Event): void {
     aria-label="再生コントロール"
   >
     <UContainer class="max-w-3xl space-y-2">
-      <p class="truncate text-sm font-medium" aria-live="polite">
-        {{ current ? current.name.replace(/\.[^.]+$/, "") : "曲が選択されていません" }}
-      </p>
+      <div class="flex items-center gap-2">
+        <span
+          class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
+          aria-hidden="true"
+        >
+          <UIcon name="i-lucide-music-2" class="text-muted" />
+          <ArtworkImage :src="current?.artworkUrl" />
+        </span>
+        <span class="min-w-0">
+          <span class="block truncate text-sm font-medium" aria-live="polite">{{
+            current
+              ? current.metadata?.title || current.name.replace(/\.[^.]+$/, "")
+              : "曲が選択されていません"
+          }}</span>
+          <span v-if="current?.metadata?.artist" class="block truncate text-xs text-muted">{{
+            current.metadata.artist
+          }}</span>
+        </span>
+      </div>
       <div class="flex items-center gap-2 text-xs tabular-nums text-muted">
         <span>{{ formatTime(currentTime) }}</span>
         <input

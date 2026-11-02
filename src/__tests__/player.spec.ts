@@ -245,7 +245,7 @@ describe("player", () => {
       player.setTracks([track("one.mp3"), track("two.mp3")]);
       await player.playAt(0);
       expect(mediaSession.playbackState).toBe("playing");
-      expect(mediaSession.metadata).toMatchObject({ init: { title: "one.mp3" } });
+      expect(mediaSession.metadata).toMatchObject({ init: { title: "one" } });
       handlers.get("nexttrack")?.({ action: "nexttrack" });
       await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 1, playing: true }));
       handlers.get("pause")?.({ action: "pause" });
@@ -521,8 +521,35 @@ describe("explicit queue and controls", () => {
       await player.playAt(1);
       expect(metadataSet).toHaveBeenCalledTimes(1);
       expect(metadataSet).toHaveBeenLastCalledWith(
-        expect.objectContaining({ init: { title: "b", artist: "offtone" } }),
+        expect.objectContaining({ init: { title: "b", artist: "", album: "", artwork: [] } }),
       );
+      const previous = player.getState();
+      const originalSrc = audio.src;
+      player.updateTracks(
+        previous.tracks.map((item) =>
+          item.name === "b"
+            ? {
+                ...item,
+                metadata: { title: "Tagged", artist: "Artist", album: "Album" },
+                artworkUrl: "blob:cover",
+              }
+            : item,
+        ),
+      );
+      expect(metadataSet).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          init: {
+            title: "Tagged",
+            artist: "Artist",
+            album: "Album",
+            artwork: [{ src: "blob:cover" }],
+          },
+        }),
+      );
+      expect(audio.src).toBe(originalSrc);
+      expect(player.getState().currentId).toBe(previous.currentId);
+      expect(player.getState().order).toEqual(previous.order);
+      expect(player.getState().playing).toBe(true);
       player.setTracks([]);
       expect(metadataSet).toHaveBeenLastCalledWith(null);
       player.dispose();
