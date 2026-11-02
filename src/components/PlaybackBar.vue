@@ -4,6 +4,7 @@ import { storeToRefs } from "pinia";
 import { ref } from "vue";
 import { usePlayerStore } from "../stores/player";
 import type { RepeatMode } from "../lib/player";
+import ArtworkImage from "./ArtworkImage.vue";
 
 const player = usePlayerStore();
 const {
@@ -49,13 +50,7 @@ function onQueueToggle(event: Event): void {
           aria-hidden="true"
         >
           <UIcon name="i-lucide-music-2" class="text-muted" />
-          <img
-            v-if="current?.artworkUrl"
-            :src="current.artworkUrl"
-            alt=""
-            class="absolute inset-0 h-full w-full object-cover"
-            @error="($event.target as HTMLImageElement).style.display = 'none'"
-          />
+          <ArtworkImage :src="current?.artworkUrl" />
         </span>
         <span class="min-w-0">
           <span class="block truncate text-sm font-medium" aria-live="polite">{{

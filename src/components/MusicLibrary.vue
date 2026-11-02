@@ -3,6 +3,7 @@ import UContainer from "@nuxt/ui/components/Container.vue";
 import { storeToRefs } from "pinia";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
+import ArtworkImage from "./ArtworkImage.vue";
 
 const library = useLibraryStore();
 const player = usePlayerStore();
@@ -110,7 +111,10 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
       >タグ解析を再開</UButton
     >
     <p v-if="analysisStatus" class="text-sm text-muted" role="status">{{ analysisStatus }}</p>
-    <UCard v-if="busy" aria-live="polite"> フォルダーを読み込んでいます。 </UCard>
+    <p v-if="busy && tracks.length" class="text-sm text-muted" role="status">
+      フォルダーを更新しています。
+    </p>
+    <UCard v-if="busy && !tracks.length" aria-live="polite"> フォルダーを読み込んでいます。 </UCard>
     <UCard v-if="!busy && !tracks.length && !needsPermission">
       <p class="flex items-start gap-2 text-sm text-muted">
         <UIcon name="i-lucide-file-music" class="mt-0.5 shrink-0" aria-hidden="true" />
@@ -138,13 +142,7 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
               aria-hidden="true"
             >
               <UIcon name="i-lucide-music-2" class="text-muted" />
-              <img
-                v-if="track.artworkUrl"
-                :src="track.artworkUrl"
-                alt=""
-                class="absolute inset-0 h-full w-full object-cover"
-                @error="($event.target as HTMLImageElement).style.display = 'none'"
-              />
+              <ArtworkImage :src="track.artworkUrl" />
             </span>
             <span class="min-w-0 flex-1">
               <span class="block truncate font-medium">{{

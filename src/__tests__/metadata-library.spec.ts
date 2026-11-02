@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPinia, setActivePinia } from "pinia";
+import { nextTick, watchEffect } from "vue";
 import type { TrackRecord } from "../lib/catalog";
 import type { MusicDirectory, Track } from "../lib/library";
 import { useLibraryStore } from "../stores/library";
@@ -149,5 +150,66 @@ describe("metadata cache integration", () => {
     expect(revoke).toHaveBeenCalledWith("blob:first");
     library.$dispose();
     expect(revoke).toHaveBeenCalledWith("blob:second");
+  });
+  it("updates only the reactive track while keeping the playing queue and Media Session", async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.parse.mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    const media = { playbackState: "none", metadata: null, setActionHandler: vi.fn() };
+    Object.defineProperty(navigator, "mediaSession", { configurable: true, value: media });
+    vi.stubGlobal(
+      "MediaMetadata",
+      class {
+        constructor(public init: MediaMetadataInit) {}
+      },
+    );
+    const createObjectURL = vi.fn().mockReturnValue("blob:audio");
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
+      this: HTMLMediaElement,
+    ) {
+      Object.defineProperty(this, "paused", { configurable: true, value: false });
+      this.dispatchEvent(new Event("play"));
+      return Promise.resolve();
+    });
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.selectFolder();
+    await vi.waitFor(() => expect(mocks.parse).toHaveBeenCalled());
+    await player.playAt(0);
+    player.setShuffle(true);
+    player.setRepeat("all");
+    player.addTrack({ ...player.tracks[0]! });
+    const updateTracks = vi.spyOn(player, "updateTracks");
+    const queue = player.queue;
+    const order = player.order;
+    const currentId = player.currentId;
+    const observed: Array<string | undefined> = [];
+    const stop = watchEffect(() => {
+      observed.push(player.current?.metadata?.title);
+    });
+    resolve({ metadata: { title: "New title", artist: "Artist" } });
+    await waitForAnalysis();
+    await nextTick();
+    expect(observed).toEqual([undefined, "New title"]);
+    expect(updateTracks).not.toHaveBeenCalled();
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(player.currentId).toBe(currentId);
+    expect(player.playing).toBe(true);
+    expect(player.repeat).toBe("all");
+    expect(player.shuffle).toBe(true);
+    expect(player.queue.every((entry) => entry.track.metadata?.title === "New title")).toBe(true);
+    expect(media.metadata).toMatchObject({ init: { title: "New title", artist: "Artist" } });
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+    stop();
+    library.$dispose();
+    player.$dispose();
+    Reflect.deleteProperty(navigator, "mediaSession");
   });
 });

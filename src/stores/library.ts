@@ -116,23 +116,14 @@ export const useLibraryStore = defineStore("library", () => {
         const url = record.artwork ? URL.createObjectURL(record.artwork) : undefined;
         if (url) artworkUrls.set(track.path, url);
         else artworkUrls.delete(track.path);
-        const next = player.tracks.map((item) =>
-          item.path === track.path ? { ...item, metadata: record.metadata, artworkUrl: url } : item,
-        );
-        player.updateTracks(next);
+        player.updateTrackMetadata(track, record.metadata, url);
         if (old) URL.revokeObjectURL(old);
       } catch {
         // Do not display stale tags when a changed file cannot be parsed.
         if (run !== analysisRun) return;
         const old = artworkUrls.get(track.path);
         artworkUrls.delete(track.path);
-        player.updateTracks(
-          player.tracks.map((item) =>
-            item.path === track.path
-              ? { ...item, metadata: undefined, artworkUrl: undefined }
-              : item,
-          ),
-        );
+        player.updateTrackMetadata(track);
         if (old) URL.revokeObjectURL(old);
       }
       if (run === analysisRun)

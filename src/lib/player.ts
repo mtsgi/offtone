@@ -521,6 +521,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     },
     setTracks,
     updateTracks,
+    refreshMetadata: syncMedia,
     playAt,
     playId,
     toggle,
