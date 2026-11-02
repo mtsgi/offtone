@@ -1,3 +1,5 @@
+import type { TrackMetadata } from "./catalog";
+
 /** 再生可能なファイルと、選択したフォルダーからの相対パス。 */
 export interface Track {
   /** 永続化に成功したルートでのみ利用可能。既存の再生処理は path を使う。 */
@@ -5,6 +7,8 @@ export interface Track {
   name: string;
   path: string;
   handle: FileSystemFileHandle;
+  metadata?: TrackMetadata;
+  artworkUrl?: string;
 }
 
 export interface MusicDirectory extends FileSystemDirectoryHandle {

@@ -47,7 +47,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let pending = false;
   let disposed = false;
   let edited = false;
-  let metadataTitle: string | null | undefined;
+  let metadataKey: string | null | undefined;
   const currentEntry = () => state.queue.find((entry) => entry.id === state.currentId);
   const currentTrack = () => currentEntry()?.track;
   const log = (event: Parameters<typeof diagnostics.record>[0], cause?: unknown) => {
@@ -58,12 +58,22 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const media = navigator.mediaSession;
     media.playbackState = state.playing ? "playing" : "paused";
     const track = currentTrack();
-    if (track && track.name !== metadataTitle && typeof MediaMetadata !== "undefined") {
-      media.metadata = new MediaMetadata({ title: track.name, artist: "offtone" });
-      metadataTitle = track.name;
-    } else if (!track && metadataTitle !== null) {
-      media.metadata = null;
-      metadataTitle = null;
+    const key = track ? JSON.stringify([track.name, track.metadata, track.artworkUrl]) : null;
+    try {
+      if (track && key !== metadataKey && typeof MediaMetadata !== "undefined") {
+        media.metadata = new MediaMetadata({
+          title: track.metadata?.title || track.name.replace(/\.[^.]+$/, ""),
+          artist: track.metadata?.artist || "",
+          album: track.metadata?.album || "",
+          artwork: track.artworkUrl ? [{ src: track.artworkUrl }] : [],
+        });
+        metadataKey = key;
+      } else if (!track && metadataKey !== null) {
+        media.metadata = null;
+        metadataKey = null;
+      }
+    } catch {
+      // Some platforms reject MediaMetadata or Blob artwork URLs; playback remains independent.
     }
     if (typeof media.setPositionState === "function") {
       try {

@@ -14,6 +14,9 @@ const {
   busy,
   needsPermission,
   permissionState,
+  analysis,
+  analysisStatus,
+  analysisCancelled,
 } = storeToRefs(library);
 const { tracks, index, playing, error: playerError } = storeToRefs(player);
 </script>
@@ -88,8 +91,27 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
       role="alert"
     />
 
+    <div
+      v-if="analysis.active"
+      class="flex items-center gap-3 text-sm text-muted"
+      aria-live="polite"
+    >
+      <span>タグを解析中 {{ analysis.done }} / {{ analysis.total }}</span>
+      <UButton size="xs" color="neutral" variant="outline" @click="library.cancelAnalysis"
+        >キャンセル</UButton
+      >
+    </div>
+    <UButton
+      v-if="analysisCancelled && !analysis.active && !busy"
+      size="xs"
+      color="neutral"
+      variant="outline"
+      @click="library.analyze"
+      >タグ解析を再開</UButton
+    >
+    <p v-if="analysisStatus" class="text-sm text-muted" role="status">{{ analysisStatus }}</p>
     <UCard v-if="busy" aria-live="polite"> フォルダーを読み込んでいます。 </UCard>
-    <UCard v-else-if="!tracks.length && !needsPermission">
+    <UCard v-if="!busy && !tracks.length && !needsPermission">
       <p class="flex items-start gap-2 text-sm text-muted">
         <UIcon name="i-lucide-file-music" class="mt-0.5 shrink-0" aria-hidden="true" />
         {{
@@ -111,11 +133,27 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
             @click="player.playAt(trackIndex)"
           >
             <span class="w-8 shrink-0 text-center text-muted">{{ trackIndex + 1 }}</span>
+            <span
+              class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
+              aria-hidden="true"
+            >
+              <UIcon name="i-lucide-music-2" class="text-muted" />
+              <img
+                v-if="track.artworkUrl"
+                :src="track.artworkUrl"
+                alt=""
+                class="absolute inset-0 h-full w-full object-cover"
+                @error="($event.target as HTMLImageElement).style.display = 'none'"
+              />
+            </span>
             <span class="min-w-0 flex-1">
               <span class="block truncate font-medium">{{
-                track.name.replace(/\.[^.]+$/, "")
+                track.metadata?.title || track.name.replace(/\.[^.]+$/, "")
               }}</span>
-              <span class="block truncate text-xs text-muted">{{ track.path }}</span>
+              <span class="block truncate text-xs text-muted">{{
+                [track.metadata?.artist, track.metadata?.album].filter(Boolean).join(" · ") ||
+                track.path
+              }}</span>
             </span>
             <UBadge v-if="index === trackIndex" color="neutral" variant="subtle">
               {{ playing ? "再生中" : "選択中" }}

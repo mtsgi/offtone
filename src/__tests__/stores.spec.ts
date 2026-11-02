@@ -13,6 +13,10 @@ vi.mock("../lib/storage", () => ({
       super(kind);
     }
   },
+  getTrack: vi.fn(),
+  putTrack: vi.fn(),
+  listTrackIds: vi.fn().mockResolvedValue([]),
+  deleteTrack: vi.fn(),
   loadDirectory: vi.fn(),
   saveDirectory: vi.fn(),
   queryDirectoryPermission: (directory: MusicDirectory) =>
