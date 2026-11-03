@@ -17,6 +17,7 @@ function track(name: string): Track {
 }
 let root: HTMLElement;
 let app: ReturnType<typeof createApp>;
+let mounted: boolean;
 let player: ReturnType<typeof usePlayerStore>;
 let audio: HTMLAudioElement;
 let created: ReturnType<typeof vi.fn>;
@@ -71,10 +72,11 @@ beforeEach(() => {
     .use(createRouter({ history: createMemoryHistory(), routes: [] }))
     .use(ui);
   app.mount(root);
+  mounted = true;
   player = usePlayerStore(pinia);
 });
 afterEach(() => {
-  app.unmount();
+  if (mounted) app.unmount();
   player.$dispose();
   root.remove();
   vi.restoreAllMocks();
@@ -82,6 +84,60 @@ afterEach(() => {
 });
 
 describe("Now Playing", () => {
+  it("restores scrolling when the app is unmounted while the dialog is open", async () => {
+    button("再生中の画面を開く").click();
+    await tick();
+    expect(document.body.style.overflow).toBe("hidden");
+    app.unmount();
+    mounted = false;
+    expect(document.body.style.overflow).toBe("");
+  });
+
+  it("exposes the current title and playback position without announcing every time update", async () => {
+    const footer = root.querySelector("footer")!;
+    const title = footer.querySelector('[aria-live="polite"]')!;
+    const progress = footer.querySelector('[role="progressbar"]')!;
+    const opener = button("再生中の画面を開く");
+    expect(title.textContent).toContain("曲が選択されていません");
+    expect(opener.getAttribute("aria-describedby")).toBe("mini-player-title");
+    expect(progress.getAttribute("aria-valuetext")).toBe("再生時間は不明です");
+    expect(progress.hasAttribute("aria-valuenow")).toBe(false);
+    expect(progress.closest("[aria-live]")).toBeNull();
+
+    player.setTracks([track("first.mp3"), track("second.mp3")]);
+    await player.playAt(0);
+    Object.defineProperty(audio!, "duration", { configurable: true, value: 100 });
+    audio!.currentTime = 25;
+    audio!.dispatchEvent(new Event("timeupdate"));
+    await tick();
+    expect(title.textContent).toContain("first");
+    expect(progress.getAttribute("aria-valuenow")).toBe("25");
+    expect(progress.getAttribute("aria-valuemax")).toBe("100");
+    expect(progress.getAttribute("aria-valuetext")).toBe("0:25 / 1:40");
+
+    player.updateTrackMetadata(player.current!, { title: "Tagged", artist: "Artist" });
+    await tick();
+    expect(title.textContent).toContain("Tagged");
+    expect(opener.getAttribute("aria-describedby")).toBe("mini-player-title mini-player-artist");
+    await player.playAt(1);
+    await tick();
+    expect(title.textContent).toContain("second");
+  });
+
+  it("keeps the queue accessible before a track is selected", async () => {
+    player.setTracks([track("first.mp3"), track("second.mp3")]);
+    await tick();
+    expect(player.current).toBeUndefined();
+    button("再生中の画面を開く").click();
+    await tick();
+    expect(root.querySelector("dialog")!.open).toBe(true);
+    root.querySelector<HTMLElement>("dialog summary")!.click();
+    expect(root.querySelector<HTMLDetailsElement>("dialog details")!.open).toBe(true);
+    button("second.mp3 を上へ").click();
+    expect(player.queue.map((entry) => entry.track.name)).toEqual(["second.mp3", "first.mp3"]);
+    expect(player.current).toBeUndefined();
+  });
+
   it("opens and closes with focus restoration without replacing playback or queue", async () => {
     player.setTracks([track("first.mp3"), track("second.mp3")]);
     await player.playAt(0);

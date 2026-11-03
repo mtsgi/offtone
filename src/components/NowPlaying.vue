@@ -1,10 +1,11 @@
 <script setup vapor lang="ts">
 import UButton from "@nuxt/ui/components/Button.vue";
 import UIcon from "@nuxt/ui/components/Icon.vue";
-import { onMounted, onScopeDispose, ref, watch } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { usePlayerStore } from "../stores/player";
 import type { RepeatMode } from "../lib/player";
+import { formatTime } from "../lib/format-time";
 import ArtworkImage from "./ArtworkImage.vue";
 
 const props = defineProps<{ open: boolean }>();
@@ -29,11 +30,6 @@ const modes: RepeatMode[] = ["off", "all", "one"];
 const repeatLabels: Record<RepeatMode, string> = { off: "オフ", all: "全曲", one: "1曲" };
 function cycleRepeat() {
   player.setRepeat(modes[(modes.indexOf(repeat.value) + 1) % modes.length]!);
-}
-function formatTime(time: number | null) {
-  if (time === null || !Number.isFinite(time)) return "--:--";
-  const seconds = Math.floor(time);
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 function inputValue(event: Event) {
   return Number((event.target as HTMLInputElement).value);
@@ -66,7 +62,7 @@ watch(
   },
   { flush: "post" },
 );
-onScopeDispose(hide);
+onBeforeUnmount(hide);
 </script>
 
 <template>
