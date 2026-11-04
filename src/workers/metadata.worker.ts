@@ -12,10 +12,10 @@ self.onmessage = async (event: MessageEvent<MetadataRequest>) => {
       maxMemoryAllocation: MAX_COVER_INPUT,
       maxMetadataEntries: 4096,
     });
-    const { title, artist, album, picture } = parsed.common;
+    const { title, artist, album, albumartist, picture } = parsed.common;
     const cover = picture?.[0];
     const artwork = cover ? await thumbnail(cover.data, cover.format) : undefined;
-    response = { id, metadata: { title, artist, album }, artwork };
+    response = { id, metadata: { title, artist, album, albumArtist: albumartist }, artwork };
   } catch (error) {
     response = { id, error: error instanceof Error ? error.message : "Parse failed" };
   }

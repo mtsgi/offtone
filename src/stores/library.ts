@@ -37,7 +37,7 @@ export const useLibraryStore = defineStore("library", () => {
   let analysisRun = 0;
   let abort = new AbortController();
   const artworkUrls = new Map<string, string>();
-  const parserVersion = 1;
+  const parserVersion = 2;
 
   function cancelAnalysis(): void {
     if (analysis.value.active) analysisCancelled.value = true;

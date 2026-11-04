@@ -88,6 +88,28 @@ describe("metadata cache integration", () => {
     expect(mocks.parse).toHaveBeenCalledTimes(3);
     library.$dispose();
   });
+  it("reparses version 1 cached metadata for album artist without clearing the database", async () => {
+    mocks.get.mockResolvedValue({
+      id: "old",
+      rootId: "root",
+      path: track.path,
+      size: file.size,
+      lastModified: file.lastModified,
+      metadataVersion: 1,
+      metadata: { title: "Old" },
+    });
+    mocks.parse.mockResolvedValue({ metadata: { title: "New", albumArtist: "Various" } });
+    const library = useLibraryStore();
+    await library.selectFolder();
+    await waitForAnalysis();
+    expect(mocks.parse).toHaveBeenCalledTimes(1);
+    expect(usePlayerStore().tracks[0]?.metadata?.albumArtist).toBe("Various");
+    expect(mocks.put).toHaveBeenCalledWith(
+      expect.objectContaining({ metadataVersion: 2 }),
+      expect.any(AbortSignal),
+    );
+    library.$dispose();
+  });
   it("ignores a cancelled result and retries after a write failure", async () => {
     let resolve!: (value: unknown) => void;
     mocks.parse.mockImplementationOnce(

@@ -167,6 +167,30 @@ describe("Now Playing", () => {
     expect(audio!.src).toBe(source);
     expect(created).toHaveBeenCalledTimes(1);
   });
+  it("returns to an open album detail after the Now Playing dialog closes", async () => {
+    const tagged = track("album.mp3");
+    tagged.metadata = { title: "Album song", album: "Album name", artist: "Artist" };
+    player.setTracks([tagged]);
+    await player.playAt(0);
+    await tick();
+    const albumTab = root.querySelector<HTMLButtonElement>('[role="tab"]:nth-child(2)')!;
+    albumTab.click();
+    await tick();
+    const albumButton = [...root.querySelectorAll<HTMLButtonElement>("[data-library-group]")][0]!;
+    albumButton.click();
+    await tick();
+    expect(root.textContent).toContain("一覧に戻る");
+    const source = audio.src;
+    const queue = player.queue;
+    button("再生中の画面を開く").click();
+    await tick();
+    root.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await tick();
+    expect(root.textContent).toContain("一覧に戻る");
+    expect(player.queue).toBe(queue);
+    expect(audio.src).toBe(source);
+    expect(created).toHaveBeenCalledTimes(1);
+  });
   it("keeps play separate and reflects metadata, artwork, tracks and controls", async () => {
     player.setTracks([track("first.mp3"), track("second.mp3")]);
     await tick();
