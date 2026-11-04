@@ -24,6 +24,7 @@ export interface FileFingerprint {
 export interface TrackMetadata {
   title?: string;
   artist?: string;
+  albumArtist?: string;
   album?: string;
   artworkRef?: string;
 }
