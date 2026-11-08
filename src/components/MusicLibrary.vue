@@ -92,6 +92,15 @@ const { tracks, error: playerError } = storeToRefs(player);
       role="alert"
     />
 
+    <span role="status" aria-label="タグ解析の状態" class="sr-only">{{
+      analysis.active
+        ? "タグ解析を開始しました。"
+        : analysisCancelled
+          ? "タグ解析をキャンセルしました。"
+          : analysis.total
+            ? "タグ解析が終了しました。"
+            : ""
+    }}</span>
     <div v-if="analysis.active" class="flex items-center gap-3 text-sm text-muted">
       <span>タグを解析中 {{ analysis.done }} / {{ analysis.total }}</span>
       <UButton size="xs" color="neutral" variant="outline" @click="library.cancelAnalysis"

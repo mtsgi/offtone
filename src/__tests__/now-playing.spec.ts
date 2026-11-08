@@ -5,6 +5,7 @@ import ui from "@nuxt/ui/vue-plugin";
 import { createRouter, createMemoryHistory } from "vue-router";
 import App from "../App.vue";
 import { usePlayerStore } from "../stores/player";
+import { useLibraryStore } from "../stores/library";
 import { createNowPlayingHistory } from "../lib/now-playing-history";
 import type { Track } from "../lib/library";
 
@@ -84,6 +85,33 @@ afterEach(() => {
 });
 
 describe("Now Playing", () => {
+  it("announces analysis lifecycle without announcing each progress update", async () => {
+    const library = useLibraryStore();
+    const status = root.querySelector('[role="status"][aria-label="タグ解析の状態"]')!;
+    expect(status.textContent?.trim()).toBe("");
+    library.analysis = { active: true, done: 0, total: 3 };
+    await tick();
+    expect(status.textContent).toContain("タグ解析を開始しました");
+    const onMutation = vi.fn();
+    const observer = new MutationObserver(onMutation);
+    observer.observe(status, { childList: true, characterData: true, subtree: true });
+    library.analysis = { active: true, done: 1, total: 3 };
+    await tick();
+    expect(observer.takeRecords()).toHaveLength(0);
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(root.textContent).toContain("タグを解析中 1 / 3");
+    library.analysis = { active: false, done: 3, total: 3 };
+    await tick();
+    expect(status.textContent).toContain("タグ解析が終了しました");
+    library.analysis = { active: true, done: 0, total: 3 };
+    library.analysisCancelled = false;
+    await tick();
+    library.analysis = { active: false, done: 1, total: 3 };
+    library.analysisCancelled = true;
+    await tick();
+    expect(status.textContent).toContain("タグ解析をキャンセルしました");
+    observer.disconnect();
+  });
   it("restores scrolling when the app is unmounted while the dialog is open", async () => {
     button("再生中の画面を開く").click();
     await tick();

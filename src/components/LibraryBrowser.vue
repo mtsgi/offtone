@@ -141,9 +141,7 @@ watch([catalog, selected, view], () => {
               {{ view === "albums" ? album?.name : artist?.name }}
             </h2>
             <p v-if="view === 'albums'" class="text-sm text-muted">{{ album?.artist }}</p>
-            <p class="text-sm text-muted">
-              {{ view === "albums" ? album?.tracks.length : artist?.tracks.length }} 曲
-            </p>
+            <p class="text-sm text-muted">{{ detailTracks.length }} 曲</p>
           </div>
         </div>
         <div v-if="view === 'artists' && artist" class="space-y-2 pb-5">

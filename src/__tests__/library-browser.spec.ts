@@ -74,6 +74,37 @@ afterEach(() => {
 });
 
 describe("library browser", () => {
+  it("shows the filtered count in album and artist details", async () => {
+    const search = root.querySelector<HTMLInputElement>("#library-search")!;
+    const count = () => root.querySelector("#library-panel h2")?.parentElement?.textContent;
+    const filter = async (value: string) => {
+      search.value = value;
+      search.dispatchEvent(new Event("input"));
+      await tick();
+    };
+    findButton("アルバム").click();
+    await tick();
+    findButton("Two").click();
+    await tick();
+    expect(count()).toContain("2 曲");
+    await filter("Second");
+    expect(count()).toContain("1 曲");
+    await filter("missing");
+    expect(count()).toContain("0 曲");
+    expect(root.textContent).toContain("検索に一致する曲がありません");
+    await filter("");
+    expect(count()).toContain("2 曲");
+
+    findButton("アーティスト").click();
+    await tick();
+    findButton("Artist").click();
+    await tick();
+    expect(count()).toContain("3 曲");
+    await filter("Second");
+    expect(count()).toContain("1 曲");
+    await filter("missing");
+    expect(count()).toContain("0 曲");
+  });
   it("plays the correct library track from search and album details without rebuilding the queue", async () => {
     await player.playAt(0);
     player.setShuffle(true);
