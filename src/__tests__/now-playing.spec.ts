@@ -5,6 +5,7 @@ import ui from "@nuxt/ui/vue-plugin";
 import { createRouter, createMemoryHistory } from "vue-router";
 import App from "../App.vue";
 import { usePlayerStore } from "../stores/player";
+import { useLibraryStore } from "../stores/library";
 import { createNowPlayingHistory } from "../lib/now-playing-history";
 import type { Track } from "../lib/library";
 
@@ -84,6 +85,46 @@ afterEach(() => {
 });
 
 describe("Now Playing", () => {
+  it("labels the folder count as the total when the track list is filtered", async () => {
+    const library = useLibraryStore();
+    library.folderName = "Music";
+    player.setTracks([track("first.mp3"), track("second.mp3")]);
+    await tick();
+    const search = root.querySelector<HTMLInputElement>("#library-search")!;
+    search.value = "second";
+    search.dispatchEvent(new Event("input"));
+    await tick();
+    expect(root.textContent).toMatch(/Music\s+· 全 2 曲/);
+    expect(root.querySelectorAll('[aria-label="曲一覧"] li')).toHaveLength(1);
+    expect(root.querySelector('[aria-label="曲一覧"]')?.textContent).toContain("second");
+  });
+  it("announces analysis lifecycle without announcing each progress update", async () => {
+    const library = useLibraryStore();
+    const status = root.querySelector('[role="status"][aria-label="タグ解析の状態"]')!;
+    expect(status.textContent?.trim()).toBe("");
+    library.analysis = { active: true, done: 0, total: 3 };
+    await tick();
+    expect(status.textContent).toContain("タグ解析を開始しました");
+    const onMutation = vi.fn();
+    const observer = new MutationObserver(onMutation);
+    observer.observe(status, { childList: true, characterData: true, subtree: true });
+    library.analysis = { active: true, done: 1, total: 3 };
+    await tick();
+    expect(observer.takeRecords()).toHaveLength(0);
+    expect(onMutation).not.toHaveBeenCalled();
+    expect(root.textContent).toContain("タグを解析中 1 / 3");
+    library.analysis = { active: false, done: 3, total: 3 };
+    await tick();
+    expect(status.textContent).toContain("タグ解析が終了しました");
+    library.analysis = { active: true, done: 0, total: 3 };
+    library.analysisCancelled = false;
+    await tick();
+    library.analysis = { active: false, done: 1, total: 3 };
+    library.analysisCancelled = true;
+    await tick();
+    expect(status.textContent).toContain("タグ解析をキャンセルしました");
+    observer.disconnect();
+  });
   it("restores scrolling when the app is unmounted while the dialog is open", async () => {
     button("再生中の画面を開く").click();
     await tick();
@@ -165,6 +206,30 @@ describe("Now Playing", () => {
     expect(player.currentId).toBe(id);
     expect(player.queue).toBe(queue);
     expect(audio!.src).toBe(source);
+    expect(created).toHaveBeenCalledTimes(1);
+  });
+  it("returns to an open album detail after the Now Playing dialog closes", async () => {
+    const tagged = track("album.mp3");
+    tagged.metadata = { title: "Album song", album: "Album name", artist: "Artist" };
+    player.setTracks([tagged]);
+    await player.playAt(0);
+    await tick();
+    const albumTab = root.querySelector<HTMLButtonElement>('[role="tab"]:nth-child(2)')!;
+    albumTab.click();
+    await tick();
+    const albumButton = [...root.querySelectorAll<HTMLButtonElement>("[data-library-group]")][0]!;
+    albumButton.click();
+    await tick();
+    expect(root.textContent).toContain("一覧に戻る");
+    const source = audio.src;
+    const queue = player.queue;
+    button("再生中の画面を開く").click();
+    await tick();
+    root.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true }));
+    await tick();
+    expect(root.textContent).toContain("一覧に戻る");
+    expect(player.queue).toBe(queue);
+    expect(audio.src).toBe(source);
     expect(created).toHaveBeenCalledTimes(1);
   });
   it("keeps play separate and reflects metadata, artwork, tracks and controls", async () => {

@@ -3,7 +3,7 @@ import UContainer from "@nuxt/ui/components/Container.vue";
 import { storeToRefs } from "pinia";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
-import ArtworkImage from "./ArtworkImage.vue";
+import LibraryBrowser from "./LibraryBrowser.vue";
 
 const library = useLibraryStore();
 const player = usePlayerStore();
@@ -19,7 +19,7 @@ const {
   analysisStatus,
   analysisCancelled,
 } = storeToRefs(library);
-const { tracks, index, playing, error: playerError } = storeToRefs(player);
+const { tracks, error: playerError } = storeToRefs(player);
 </script>
 
 <template>
@@ -29,7 +29,7 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
         <h2 class="text-base font-semibold">ライブラリ</h2>
         <p class="truncate text-sm text-muted">
           {{ folderName || "フォルダーが選択されていません" }}
-          <span v-if="folderName && !needsPermission"> · {{ tracks.length }} 曲</span>
+          <span v-if="folderName && !needsPermission"> · 全 {{ tracks.length }} 曲</span>
         </p>
       </div>
       <UButton
@@ -92,11 +92,16 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
       role="alert"
     />
 
-    <div
-      v-if="analysis.active"
-      class="flex items-center gap-3 text-sm text-muted"
-      aria-live="polite"
-    >
+    <span role="status" aria-label="タグ解析の状態" class="sr-only">{{
+      analysis.active
+        ? "タグ解析を開始しました。"
+        : analysisCancelled
+          ? "タグ解析をキャンセルしました。"
+          : analysis.total
+            ? "タグ解析が終了しました。"
+            : ""
+    }}</span>
+    <div v-if="analysis.active" class="flex items-center gap-3 text-sm text-muted">
       <span>タグを解析中 {{ analysis.done }} / {{ analysis.total }}</span>
       <UButton size="xs" color="neutral" variant="outline" @click="library.cancelAnalysis"
         >キャンセル</UButton
@@ -125,40 +130,6 @@ const { tracks, index, playing, error: playerError } = storeToRefs(player);
         }}
       </p>
     </UCard>
-    <UCard v-else-if="tracks.length" :ui="{ body: 'p-0 sm:p-0' }">
-      <ul aria-label="曲一覧" class="divide-y divide-default">
-        <li v-for="(track, trackIndex) in tracks" :key="track.path">
-          <UButton
-            block
-            color="neutral"
-            :variant="index === trackIndex ? 'soft' : 'ghost'"
-            class="justify-start rounded-none text-left"
-            :aria-current="index === trackIndex ? 'true' : undefined"
-            @click="player.playAt(trackIndex)"
-          >
-            <span class="w-8 shrink-0 text-center text-muted">{{ trackIndex + 1 }}</span>
-            <span
-              class="relative flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-elevated"
-              aria-hidden="true"
-            >
-              <UIcon name="i-lucide-music-2" class="text-muted" />
-              <ArtworkImage :src="track.artworkUrl" />
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="block truncate font-medium">{{
-                track.metadata?.title || track.name.replace(/\.[^.]+$/, "")
-              }}</span>
-              <span class="block truncate text-xs text-muted">{{
-                [track.metadata?.artist, track.metadata?.album].filter(Boolean).join(" · ") ||
-                track.path
-              }}</span>
-            </span>
-            <UBadge v-if="index === trackIndex" color="neutral" variant="subtle">
-              {{ playing ? "再生中" : "選択中" }}
-            </UBadge>
-          </UButton>
-        </li>
-      </ul>
-    </UCard>
+    <LibraryBrowser v-else-if="tracks.length" :tracks="tracks" :directory="directory" />
   </UContainer>
 </template>
