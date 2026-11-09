@@ -35,7 +35,7 @@ function artistKey(name?: string): string {
 }
 
 export function matchesTrack(track: Track, query: string): boolean {
-  const term = query.trim().toLocaleLowerCase();
+  const term = query.trim().toLowerCase();
   if (!term) return true;
   return [
     trackTitle(track),
@@ -43,7 +43,7 @@ export function matchesTrack(track: Track, query: string): boolean {
     value(track.metadata?.album) ?? UNKNOWN_ALBUM,
     track.metadata?.albumArtist,
     track.path,
-  ].some((text) => text?.toLocaleLowerCase().includes(term));
+  ].some((text) => text?.toLowerCase().includes(term));
 }
 
 /** Preserve library order; no tag-based track ordering is implied. */

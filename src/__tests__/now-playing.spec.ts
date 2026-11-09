@@ -85,6 +85,19 @@ afterEach(() => {
 });
 
 describe("Now Playing", () => {
+  it("labels the folder count as the total when the track list is filtered", async () => {
+    const library = useLibraryStore();
+    library.folderName = "Music";
+    player.setTracks([track("first.mp3"), track("second.mp3")]);
+    await tick();
+    const search = root.querySelector<HTMLInputElement>("#library-search")!;
+    search.value = "second";
+    search.dispatchEvent(new Event("input"));
+    await tick();
+    expect(root.textContent).toMatch(/Music\s+· 全 2 曲/);
+    expect(root.querySelectorAll('[aria-label="曲一覧"] li')).toHaveLength(1);
+    expect(root.querySelector('[aria-label="曲一覧"]')?.textContent).toContain("second");
+  });
   it("announces analysis lifecycle without announcing each progress update", async () => {
     const library = useLibraryStore();
     const status = root.querySelector('[role="status"][aria-label="タグ解析の状態"]')!;

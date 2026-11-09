@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { shallowReactive, computed } from "vue";
 import type { Track } from "../lib/library";
 import { buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
@@ -45,6 +45,22 @@ describe("music catalog", () => {
       expect(matchesTrack(t, query)).toBe(true);
     expect(matchesTrack(t, "missing")).toBe(false);
     expect(matchesTrack(track("x/hello.mp3"), " HELLO ")).toBe(true);
+  });
+  it("matches Japanese and English independently of the device locale", () => {
+    const locale = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (
+      this: string,
+    ) {
+      return String(this).replace(/I/g, "ı").toLowerCase();
+    });
+    try {
+      const t = track("song.mp3", { title: "INDIGO 夜", artist: "ARTIST", album: "MIX" });
+      expect(matchesTrack(t, " indigo ")).toBe(true);
+      expect(matchesTrack(t, "artist")).toBe(true);
+      expect(matchesTrack(t, "mix")).toBe(true);
+      expect(matchesTrack(t, "夜")).toBe(true);
+    } finally {
+      locale.mockRestore();
+    }
   });
   it("reclassifies reactive metadata as it arrives", () => {
     const t = shallowReactive(track("song.mp3"));

@@ -29,7 +29,7 @@ const { tracks, error: playerError } = storeToRefs(player);
         <h2 class="text-base font-semibold">ライブラリ</h2>
         <p class="truncate text-sm text-muted">
           {{ folderName || "フォルダーが選択されていません" }}
-          <span v-if="folderName && !needsPermission"> · {{ tracks.length }} 曲</span>
+          <span v-if="folderName && !needsPermission"> · 全 {{ tracks.length }} 曲</span>
         </p>
       </div>
       <UButton
