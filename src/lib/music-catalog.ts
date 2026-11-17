@@ -2,6 +2,12 @@ import type { Track } from "./library";
 
 export const UNKNOWN_ARTIST = "不明なアーティスト";
 export const UNKNOWN_ALBUM = "不明なアルバム";
+export const VARIOUS_ARTISTS = "Various Artists";
+
+export type AlbumGrouping = "metadata" | "folder";
+export interface CatalogOptions {
+  albumGrouping?: AlbumGrouping;
+}
 
 const value = (text?: string) => text?.trim() || undefined;
 export const trackTitle = (track: Track) =>
@@ -24,7 +30,16 @@ export interface Artist {
 }
 
 // Null distinguishes absent tags from a literal "unknown" label. JSON tuples avoid delimiter collisions.
-export function albumKey(track: Track): string {
+export function albumKey(track: Track, options: CatalogOptions = {}): string {
+  if (options.albumGrouping === "folder") {
+    const album = value(track.metadata?.album);
+    // Missing album tags never imply a shared work, even within one directory.
+    if (!album) return JSON.stringify(["folder-track", track.path]);
+    // scanDirectory produces root-relative paths with `/`. Keep literal backslashes,
+    // case and whitespace in file names intact so distinct directories cannot merge.
+    const parent = track.path.slice(0, Math.max(0, track.path.lastIndexOf("/")));
+    return JSON.stringify(["folder", parent, album]);
+  }
   return JSON.stringify([
     value(track.metadata?.album) ?? null,
     value(track.metadata?.albumArtist) ?? value(track.metadata?.artist) ?? null,
@@ -47,11 +62,14 @@ export function matchesTrack(track: Track, query: string): boolean {
 }
 
 /** Preserve library order; no tag-based track ordering is implied. */
-export function buildCatalog(tracks: readonly Track[]): { albums: Album[]; artists: Artist[] } {
+export function buildCatalog(
+  tracks: readonly Track[],
+  options: CatalogOptions = {},
+): { albums: Album[]; artists: Artist[] } {
   const albums = new Map<string, Album>();
   const artists = new Map<string, Artist>();
   for (const track of tracks) {
-    const key = albumKey(track);
+    const key = albumKey(track, options);
     let album = albums.get(key);
     if (!album) {
       album = {
@@ -81,6 +99,17 @@ export function buildCatalog(tracks: readonly Track[]): { albums: Album[]; artis
       artist.tracks.push(track);
       artist.artworkUrl ??= track.artworkUrl;
       if (!artist.albums.includes(album)) artist.albums.push(album);
+    }
+  }
+  if (options.albumGrouping === "folder") {
+    for (const album of albums.values()) {
+      const names = new Set(
+        album.tracks.map(
+          (track) =>
+            value(track.metadata?.albumArtist) ?? value(track.metadata?.artist) ?? UNKNOWN_ARTIST,
+        ),
+      );
+      album.artist = names.size === 1 ? [...names][0]! : VARIOUS_ARTISTS;
     }
   }
   return { albums: [...albums.values()], artists: [...artists.values()] };

@@ -4,6 +4,7 @@ import UIcon from "@nuxt/ui/components/Icon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { MusicDirectory, Track } from "../lib/library";
 import { buildCatalog, matchesTrack } from "../lib/music-catalog";
+import { useSettingsStore } from "../stores/settings";
 import ArtworkImage from "./ArtworkImage.vue";
 import TrackList from "./TrackList.vue";
 
@@ -18,9 +19,29 @@ const view = ref<View>("tracks");
 const query = ref("");
 const selected = ref<string>();
 let openerKey: string | undefined;
-const catalog = computed(() => buildCatalog(props.tracks));
+const settings = useSettingsStore();
+const catalog = computed(() =>
+  buildCatalog(props.tracks, { albumGrouping: settings.albumGrouping }),
+);
 const filtered = computed(() => props.tracks.filter((track) => matchesTrack(track, query.value)));
-const results = computed(() => buildCatalog(filtered.value));
+const results = computed(() => {
+  const matches = new Set(filtered.value);
+  // Filter groups from the complete catalog so a search keeps the album's display
+  // artist (e.g. Various Artists) even when only one singer matches.
+  const albums = catalog.value.albums.flatMap((item) => {
+    const tracks = item.tracks.filter((track) => matches.has(track));
+    return tracks.length ? [{ ...item, tracks }] : [];
+  });
+  const artists = catalog.value.artists.flatMap((item) => {
+    const tracks = item.tracks.filter((track) => matches.has(track));
+    const matchingTracks = new Set(tracks);
+    const matchingAlbums = item.albums.filter((album) =>
+      album.tracks.some((track) => matchingTracks.has(track)),
+    );
+    return tracks.length ? [{ ...item, tracks, albums: matchingAlbums }] : [];
+  });
+  return { albums, artists };
+});
 const album = computed(() => catalog.value.albums.find((item) => item.key === selected.value));
 const artist = computed(() => catalog.value.artists.find((item) => item.key === selected.value));
 const detailTracks = computed(

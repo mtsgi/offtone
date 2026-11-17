@@ -3,6 +3,7 @@ import { createApp, h, nextTick, ref, vaporInteropPlugin } from "vue";
 import { createPinia } from "pinia";
 import ui from "@nuxt/ui/vue-plugin";
 import LibraryBrowser from "../components/LibraryBrowser.vue";
+import { useSettingsStore } from "../stores/settings";
 import { usePlayerStore } from "../stores/player";
 import type { MusicDirectory, Track } from "../lib/library";
 
@@ -74,6 +75,71 @@ afterEach(() => {
 });
 
 describe("library browser", () => {
+  it("reclassifies albums, searches and artist details without changing playback", async () => {
+    player.updateTrackMetadata(player.tracks[1]!, {
+      title: "Second",
+      album: "Two",
+      artist: "Other",
+    });
+    await player.playAt(0);
+    player.setShuffle(true);
+    player.setRepeat("one");
+    const source = audio.src;
+    const queue = player.queue;
+    const order = player.order;
+    const current = player.current;
+    const reset = vi.spyOn(player, "setTracks");
+    findButton("アルバム").click();
+    await tick();
+    expect(root.querySelectorAll("[data-library-group]")).toHaveLength(3);
+    findButton("Two").click();
+    await tick();
+    void useSettingsStore().setAlbumGrouping("folder");
+    await tick();
+    expect(root.textContent).not.toContain("一覧に戻る");
+    expect(root.querySelectorAll("[data-library-group]")).toHaveLength(2);
+    expect(root.textContent).toContain("Various Artists");
+    expect(player.current).toBe(current);
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(audio.src).toBe(source);
+    expect(vi.mocked(URL).createObjectURL).toHaveBeenCalledTimes(1);
+    const search = root.querySelector<HTMLInputElement>("#library-search")!;
+    search.value = "Second";
+    search.dispatchEvent(new Event("input"));
+    await tick();
+    expect(root.querySelectorAll("[data-library-group]")).toHaveLength(1);
+    expect(root.textContent).toContain("Various Artists");
+    findButton("Two").click();
+    await tick();
+    expect(root.textContent).toContain("1 曲");
+    findButton("Second").click();
+    await vi.waitFor(() => expect(player.current?.path).toBe("two.mp3"));
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+    findButton("アーティスト").click();
+    await tick();
+    findButton("Artist").click();
+    await tick();
+    expect(root.textContent).toContain("Various Artists");
+    void useSettingsStore().setAlbumGrouping("metadata");
+    await tick();
+    expect(root.textContent).toContain("一覧に戻る"); // artist keys are stable
+    expect(root.textContent).not.toContain("Various Artists");
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(player.shuffle).toBe(true);
+    expect(player.repeat).toBe("one");
+    expect(player.playing).toBe(true);
+    expect(created).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+    // Only the explicit click above changed the selected track and its audio URL.
+    expect(current?.path).toBe("one.mp3");
+    expect(source).toBe(audio.src);
+    expect(vi.mocked(URL).createObjectURL).toHaveBeenCalledTimes(2);
+  });
   it("shows the filtered count in album and artist details", async () => {
     const search = root.querySelector<HTMLInputElement>("#library-search")!;
     const count = () => root.querySelector("#library-panel h2")?.parentElement?.textContent;

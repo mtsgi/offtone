@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createApp, nextTick, vaporInteropPlugin } from "vue";
+import { IDBFactory } from "fake-indexeddb";
+import { useSettingsStore } from "../stores/settings";
 import { createPinia } from "pinia";
 import ui from "@nuxt/ui/vue-plugin";
 import { createRouter, createMemoryHistory } from "vue-router";
@@ -35,6 +37,7 @@ async function tick() {
 }
 beforeEach(() => {
   history.replaceState({}, "", "/");
+  vi.stubGlobal("indexedDB", new IDBFactory());
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
@@ -85,6 +88,108 @@ afterEach(() => {
 });
 
 describe("Now Playing", () => {
+  it("keeps the live player and library mounted through settings, mode changes and Android Back", async () => {
+    const library = useLibraryStore();
+    const settings = useSettingsStore();
+    await settings.restore();
+    const a = track("mix/a.mp3");
+    const b = track("mix/b.mp3");
+    a.metadata = { title: "First", album: "Mix", artist: "A" };
+    b.metadata = { title: "Second", album: "Mix", artist: "B" };
+    player.setTracks([a, b]);
+    await player.playAt(0);
+    player.setShuffle(true);
+    player.setRepeat("all");
+    Object.defineProperty(audio, "duration", { configurable: true, value: 100 });
+    audio.currentTime = 25;
+    audio.dispatchEvent(new Event("timeupdate"));
+    await tick();
+    const reset = vi.spyOn(player, "setTracks");
+    const analyze = vi.spyOn(library, "analyze");
+    const scan = vi.spyOn(library, "refresh");
+    const file = vi.spyOn(a.handle, "getFile");
+    const source = audio.src;
+    const queue = player.queue;
+    const order = player.order;
+    const current = player.current;
+    const libraryMain = root.querySelector("main")!;
+    const miniPlayer = root.querySelector("footer")!;
+    const search = root.querySelector<HTMLInputElement>("#library-search")!;
+    root.querySelector<HTMLButtonElement>("#library-tab-albums")!.click();
+    await tick();
+    root.querySelector<HTMLButtonElement>("[data-library-group]")!.click();
+    await tick();
+    button("設定を開く").focus();
+    button("設定を開く").click();
+    await tick();
+    expect(root.querySelector("main")).toBe(libraryMain);
+    expect(libraryMain.style.display).toBe("none");
+    expect(root.querySelector("footer")).toBe(miniPlayer);
+    expect(document.activeElement?.id).toBe("settings-title");
+    expect(root.querySelector<HTMLInputElement>('input[value="metadata"]')!.checked).toBe(true);
+    root.querySelector<HTMLInputElement>('input[value="folder"]')!.click();
+    await vi.waitFor(() => expect(settings.saving).toBe(false));
+    await tick();
+    expect(settings.albumGrouping).toBe("folder");
+    expect(player.current).toBe(current);
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(player.playing).toBe(true);
+    expect(player.currentTime).toBe(25);
+    expect(player.shuffle).toBe(true);
+    expect(player.repeat).toBe("all");
+    expect(audio.src).toBe(source);
+    expect(created).toHaveBeenCalledTimes(1);
+    expect(createUrl).toHaveBeenCalledTimes(1);
+    expect(reset).not.toHaveBeenCalled();
+    expect(analyze).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
+    expect(file).not.toHaveBeenCalled();
+    button("再生中の画面を開く").focus();
+    button("再生中の画面を開く").click();
+    await tick();
+    expect(root.querySelector("dialog")!.open).toBe(true);
+    history.back(); // Android Back dismisses only Now Playing
+    await vi.waitFor(() => expect(root.querySelector("dialog")!.open).toBe(false));
+    expect(root.querySelector("#settings-title")).not.toBeNull();
+    expect(document.activeElement).toBe(button("再生中の画面を開く"));
+    history.back(); // next Back returns to the existing library
+    await vi.waitFor(() => expect(root.querySelector("#settings-title")).toBeNull());
+    await tick();
+    expect(document.activeElement).toBe(button("設定を開く"));
+    expect(libraryMain.style.display).toBe("");
+    expect(root.querySelector("#library-search")).toBe(search);
+    expect(root.textContent).not.toContain("一覧に戻る"); // obsolete metadata album key
+    expect(root.textContent).toContain("Various Artists");
+    expect(player.queue).toBe(queue);
+    expect(player.playing).toBe(true);
+    expect(createUrl).toHaveBeenCalledTimes(1);
+  });
+  it("returns with the settings back button and shows a retry after a failed save", async () => {
+    const settings = useSettingsStore();
+    await settings.restore();
+    button("設定を開く").click();
+    await tick();
+    vi.stubGlobal("indexedDB", undefined);
+    root.querySelector<HTMLInputElement>('input[value="folder"]')!.click();
+    await vi.waitFor(() => expect(settings.saveFailed).toBe(true));
+    await tick();
+    expect(root.textContent).toContain("今回のみ有効");
+    const retry = [...root.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("保存を再試行"),
+    )!;
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    retry.click();
+    await vi.waitFor(() => expect(settings.status).toBe("設定を保存しました。"));
+    const back = [...root.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("ライブラリに戻る"),
+    )!;
+    back.click();
+    await vi.waitFor(() => expect(history.state.__offtoneView).toBeUndefined());
+    await tick();
+    expect(root.querySelector("#settings-title")).toBeNull();
+    expect(document.activeElement).toBe(button("設定を開く"));
+  });
   it("labels the folder count as the total when the track list is filtered", async () => {
     const library = useLibraryStore();
     library.folderName = "Music";
@@ -308,6 +413,7 @@ describe("temporary history entry", () => {
     listeners.get("popstate")!(new Event("popstate"));
     expect(state).toEqual({ existing: 1 });
     controller.open();
+    state = { existing: 1 };
     listeners.get("popstate")!(new Event("popstate"));
     controller.close();
     expect(back).toHaveBeenCalledTimes(1);

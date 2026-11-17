@@ -1,3 +1,4 @@
+import type { AppSettings } from "./settings";
 import type { MusicDirectory } from "./library";
 import type { RootId, TrackId, TrackRecord } from "./catalog";
 
@@ -7,6 +8,7 @@ const SETTINGS = "settings";
 const ROOTS = "roots";
 const TRACKS = "tracks";
 const DIRECTORY_KEY = "music-directory";
+const APP_SETTINGS_KEY = "app-settings";
 
 export interface RootRecord {
   id: RootId;
@@ -193,4 +195,16 @@ export function queryDirectoryPermission(directory: MusicDirectory): Promise<Per
 
 export function requestDirectoryPermission(directory: MusicDirectory): Promise<PermissionState> {
   return directory.requestPermission({ mode: "read" });
+}
+
+/** Preferences use their own key; directory handles and the DB schema stay intact. */
+export function loadSettings(): Promise<unknown> {
+  return transaction([SETTINGS], "readonly", (tx) =>
+    tx.objectStore(SETTINGS).get(APP_SETTINGS_KEY),
+  );
+}
+export function saveSettings(settings: AppSettings): Promise<IDBValidKey> {
+  return transaction([SETTINGS], "readwrite", (tx) =>
+    tx.objectStore(SETTINGS).put(settings, APP_SETTINGS_KEY),
+  );
 }

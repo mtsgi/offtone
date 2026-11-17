@@ -1,23 +1,31 @@
 <script setup vapor lang="ts">
 import UApp from "@nuxt/ui/components/App.vue";
-import { onMounted, onScopeDispose, ref } from "vue";
+import { nextTick, onMounted, onScopeDispose, ref } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
-import { createNowPlayingHistory } from "./lib/now-playing-history";
+import SettingsView from "./components/SettingsView.vue";
+import { createViewHistory } from "./lib/view-history";
+import { useSettingsStore } from "./stores/settings";
 import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
 import UpdateNotice from "./components/UpdateNotice.vue";
 import { useLibraryStore } from "./stores/library";
 
 const library = useLibraryStore();
+const settings = useSettingsStore();
+const settingsOpen = ref(false);
 const nowPlayingOpen = ref(false);
-const nowPlayingHistory = createNowPlayingHistory(window, (open) => {
-  nowPlayingOpen.value = open;
+const viewHistory = createViewHistory(window, (view) => {
+  const leavingSettings = settingsOpen.value && !view.settings;
+  settingsOpen.value = view.settings;
+  nowPlayingOpen.value = view.nowPlaying;
+  if (leavingSettings) void nextTick(() => document.getElementById("settings-button")?.focus());
 });
-onScopeDispose(() => nowPlayingHistory.dispose());
+onScopeDispose(() => viewHistory.dispose());
 
 onMounted(() => {
+  void settings.restore();
   void library.restore();
 });
 </script>
@@ -25,12 +33,13 @@ onMounted(() => {
 <template>
   <UApp>
     <div class="flex min-h-dvh flex-col">
-      <FolderHeader />
+      <FolderHeader :settings-open="settingsOpen" @settings="viewHistory.openSettings" />
       <UpdateNotice />
-      <MusicLibrary />
-      <DiagnosticsPanel />
-      <PlaybackBar @open="nowPlayingHistory.open" />
-      <NowPlaying :open="nowPlayingOpen" @close="nowPlayingHistory.close" />
+      <MusicLibrary v-show="!settingsOpen" />
+      <SettingsView v-if="settingsOpen" @back="viewHistory.closeSettings" />
+      <DiagnosticsPanel v-show="!settingsOpen" />
+      <PlaybackBar @open="viewHistory.openNowPlaying" />
+      <NowPlaying :open="nowPlayingOpen" @close="viewHistory.closeNowPlaying" />
     </div>
   </UApp>
 </template>
