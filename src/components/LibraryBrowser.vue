@@ -44,11 +44,13 @@ const results = computed(() => {
 });
 const album = computed(() => catalog.value.albums.find((item) => item.key === selected.value));
 const artist = computed(() => catalog.value.artists.find((item) => item.key === selected.value));
-const detailTracks = computed(
-  () =>
-    (view.value === "albums" ? album.value?.tracks : artist.value?.tracks)?.filter((track) =>
-      matchesTrack(track, query.value),
-    ) ?? [],
+const artistResult = computed(() =>
+  results.value.artists.find((item) => item.key === selected.value),
+);
+const detailTracks = computed(() =>
+  view.value === "albums"
+    ? (album.value?.tracks.filter((track) => matchesTrack(track, query.value)) ?? [])
+    : (artistResult.value?.tracks ?? []),
 );
 function setView(id: View) {
   view.value = id;
@@ -161,19 +163,32 @@ watch([catalog, selected, view], () => {
             <h2 class="break-words text-xl font-semibold">
               {{ view === "albums" ? album?.name : artist?.name }}
             </h2>
+            <p v-if="view === 'albums' && album?.sourceFile" class="text-sm">
+              ファイル: {{ album.sourceFile.name }}
+              <span class="block break-all text-xs text-muted">{{ album.sourceFile.path }}</span>
+            </p>
             <p v-if="view === 'albums'" class="text-sm text-muted">{{ album?.artist }}</p>
-            <p class="text-sm text-muted">{{ detailTracks.length }} 曲</p>
+            <p class="text-sm text-muted">
+              <span v-if="view === 'artists'"
+                >{{ artistResult?.albums.length ?? 0 }} アルバム ·
+              </span>
+              {{ detailTracks.length }} 曲
+            </p>
           </div>
         </div>
         <div v-if="view === 'artists' && artist" class="space-y-2 pb-5">
           <h3 class="font-semibold">アルバム</h3>
-          <ul class="flex flex-wrap gap-2">
+          <ul aria-label="関連アルバム" class="flex flex-wrap gap-2">
             <li
-              v-for="item in artist.albums"
+              v-for="item in artistResult?.albums ?? []"
               :key="item.key"
               class="rounded bg-elevated px-3 py-2 text-sm"
             >
               {{ item.name }} · {{ item.artist }}
+              <span v-if="item.sourceFile" class="block">
+                ファイル: {{ item.sourceFile.name }}
+                <span class="block break-all text-xs text-muted">{{ item.sourceFile.path }}</span>
+              </span>
             </li>
           </ul>
         </div>
@@ -206,8 +221,12 @@ watch([catalog, selected, view], () => {
                 aria-hidden="true"
                 ><UIcon name="i-lucide-disc-3" class="text-4xl text-muted" /><ArtworkImage
                   :src="item.artworkUrl" /></span
-              ><span class="mt-2 block truncate font-semibold">{{ item.name }}</span
-              ><span class="block truncate text-sm text-muted"
+              ><span class="mt-2 block truncate font-semibold">{{ item.name }}</span>
+              <span v-if="item.sourceFile" class="block break-all text-sm">
+                ファイル: {{ item.sourceFile.name }}
+                <span class="block text-xs text-muted">{{ item.sourceFile.path }}</span>
+              </span>
+              <span class="block truncate text-sm text-muted"
                 >{{ item.artist }} · {{ item.tracks.length }} 曲</span
               >
             </button>

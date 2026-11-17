@@ -20,6 +20,7 @@ export interface Album {
   artist: string;
   tracks: Track[];
   artworkUrl?: string;
+  sourceFile?: { name: string; path: string };
 }
 export interface Artist {
   key: string;
@@ -79,6 +80,9 @@ export function buildCatalog(
           value(track.metadata?.albumArtist) ?? value(track.metadata?.artist) ?? UNKNOWN_ARTIST,
         tracks: [],
       };
+      if (options.albumGrouping === "folder" && !value(track.metadata?.album)) {
+        album.sourceFile = { name: track.name.replace(/\.[^.]+$/, ""), path: track.path };
+      }
       albums.set(key, album);
     }
     album.tracks.push(track);

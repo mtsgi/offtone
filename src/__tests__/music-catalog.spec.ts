@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { shallowReactive, computed } from "vue";
 import type { Track } from "../lib/library";
-import { buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
+import { albumKey, buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
 
 function track(path: string, metadata?: Track["metadata"]): Track {
   return { path, name: path.split("/").pop()!, metadata, handle: {} as FileSystemFileHandle };
@@ -74,6 +74,28 @@ describe("music catalog", () => {
 
 const folder = { albumGrouping: "folder" } as const;
 describe("folder album grouping", () => {
+  it("adds file identification only to untagged folder groups without changing names or keys", () => {
+    const tracks = [
+      track("song.mp3"),
+      track("nested/song.mp3", { title: "Tagged title" }),
+      track("nested/song.flac", { album: "  " }),
+      track("nested/tagged.mp3", { album: "不明なアルバム" }),
+    ];
+    const before = structuredClone(tracks);
+    const albums = buildCatalog(tracks, folder).albums;
+    expect(albums.slice(0, 3).map((album) => album.sourceFile)).toEqual([
+      { name: "song", path: "song.mp3" },
+      { name: "song", path: "nested/song.mp3" },
+      { name: "song", path: "nested/song.flac" },
+    ]);
+    expect(albums.every((album) => album.name === "不明なアルバム")).toBe(true);
+    for (const item of tracks.slice(0, 3))
+      expect(albumKey(item, folder)).toBe(JSON.stringify(["folder-track", item.path]));
+    expect(new Set(albums.map((album) => album.key)).size).toBe(4);
+    expect(albums[3]?.sourceFile).toBeUndefined(); // A literal album tag is not missing.
+    expect(buildCatalog(tracks).albums.every((album) => !album.sourceFile)).toBe(true);
+    expect(tracks).toEqual(before);
+  });
   it("merges compilations without album artists only within the same parent and album", () => {
     const tracks = [
       track("mix/a.mp3", { album: " Mix ", artist: "A" }),
@@ -134,9 +156,11 @@ describe("folder album grouping", () => {
     const b = shallowReactive(track("mix/b.mp3"));
     const catalog = computed(() => buildCatalog([a, b], folder));
     expect(catalog.value.albums).toHaveLength(2);
+    expect(catalog.value.albums[0]?.sourceFile).toEqual({ name: "a", path: "mix/a.mp3" });
     a.metadata = { album: "Mix", artist: "A" };
     b.metadata = { album: "Mix", artist: "B" };
     expect(catalog.value.albums).toHaveLength(1);
+    expect(catalog.value.albums[0]?.sourceFile).toBeUndefined();
     b.metadata = { album: "Solo", artist: "B" };
     expect(catalog.value.albums).toHaveLength(2);
     b.metadata = { album: "Mix", artist: "B" };
