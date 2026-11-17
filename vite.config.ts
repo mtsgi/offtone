@@ -24,6 +24,7 @@ export default defineConfig({
         clientBundle: {
           icons: [
             "lucide:folder-open",
+            "lucide:settings",
             "lucide:refresh-cw",
             "lucide:shield-check",
             "lucide:triangle-alert",

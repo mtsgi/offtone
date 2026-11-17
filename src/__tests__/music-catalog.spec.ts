@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { shallowReactive, computed } from "vue";
 import type { Track } from "../lib/library";
-import { buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
+import { albumKey, buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
 
 function track(path: string, metadata?: Track["metadata"]): Track {
   return { path, name: path.split("/").pop()!, metadata, handle: {} as FileSystemFileHandle };
@@ -69,5 +69,102 @@ describe("music catalog", () => {
     t.metadata = { album: "New", artist: "Singer" };
     expect(catalog.value.albums[0]?.name).toBe("New");
     expect(catalog.value.artists[0]?.name).toBe("Singer");
+  });
+});
+
+const folder = { albumGrouping: "folder" } as const;
+describe("folder album grouping", () => {
+  it("adds file identification only to untagged folder groups without changing names or keys", () => {
+    const tracks = [
+      track("song.mp3"),
+      track("nested/song.mp3", { title: "Tagged title" }),
+      track("nested/song.flac", { album: "  " }),
+      track("nested/tagged.mp3", { album: "不明なアルバム" }),
+    ];
+    const before = structuredClone(tracks);
+    const albums = buildCatalog(tracks, folder).albums;
+    expect(albums.slice(0, 3).map((album) => album.sourceFile)).toEqual([
+      { name: "song", path: "song.mp3" },
+      { name: "song", path: "nested/song.mp3" },
+      { name: "song", path: "nested/song.flac" },
+    ]);
+    expect(albums.every((album) => album.name === "不明なアルバム")).toBe(true);
+    for (const item of tracks.slice(0, 3))
+      expect(albumKey(item, folder)).toBe(JSON.stringify(["folder-track", item.path]));
+    expect(new Set(albums.map((album) => album.key)).size).toBe(4);
+    expect(albums[3]?.sourceFile).toBeUndefined(); // A literal album tag is not missing.
+    expect(buildCatalog(tracks).albums.every((album) => !album.sourceFile)).toBe(true);
+    expect(tracks).toEqual(before);
+  });
+  it("merges compilations without album artists only within the same parent and album", () => {
+    const tracks = [
+      track("mix/a.mp3", { album: " Mix ", artist: "A" }),
+      track("mix/b.mp3", { album: "Mix", artist: "B" }),
+      track("other/a.mp3", { album: "Mix", artist: "A" }),
+      track("mix/c.mp3", { album: "Other", artist: "A" }),
+    ];
+    const before = structuredClone(tracks.map(({ metadata, path }) => ({ metadata, path })));
+    expect(buildCatalog(tracks).albums.map((album) => album.tracks.length)).toEqual([2, 1, 1]);
+    expect(buildCatalog(tracks, { albumGrouping: "metadata" })).toEqual(buildCatalog(tracks));
+    const result = buildCatalog(tracks, folder);
+    expect(result.albums.map((a) => a.tracks.length)).toEqual([2, 1, 1]);
+    expect(result.albums[0]?.artist).toBe("Various Artists");
+    expect(result.artists.find((a) => a.name === "B")?.albums[0]).toBe(result.albums[0]);
+    expect(tracks.map(({ metadata, path }) => ({ metadata, path }))).toEqual(before);
+  });
+  it("uses a shared album artist for display without using it as a folder key", () => {
+    const result = buildCatalog(
+      [
+        track("a.mp3", { album: "Mix", albumArtist: "Curator", artist: "A" }),
+        track("b.mp3", { album: "Mix", albumArtist: "Curator", artist: "B" }),
+      ],
+      folder,
+    );
+    expect(result.albums).toHaveLength(1);
+    expect(result.albums[0]?.artist).toBe("Curator");
+  });
+  it("isolates absent or blank albums per full path, including root files and duplicate names", () => {
+    const tracks = [
+      track("song.mp3"),
+      track("other.mp3", { album: "  " }),
+      track("a/song.mp3"),
+      track("b/song.mp3"),
+      track("a/other.mp3"),
+      track("a/tagged.mp3", { album: "不明なアルバム" }),
+    ];
+    const result = buildCatalog(tracks, folder);
+    expect(result.albums).toHaveLength(tracks.length);
+    expect(new Set(result.albums.map((a) => a.key)).size).toBe(tracks.length);
+    expect(result.albums.every((a) => a.tracks.length === 1)).toBe(true);
+  });
+  it("handles root albums and preserves case, whitespace, literal backslashes and tuple boundaries", () => {
+    const tracks = [
+      track("one.mp3", { album: "Root" }),
+      track("two.mp3", { album: "Root" }),
+      ...["a", "A", " a", "a ", "a/b", "a\\b"].map((path) =>
+        track(`${path}/song.mp3`, { album: "Root" }),
+      ),
+      track("a,b/song.mp3", { album: "c" }),
+      track("a/song.mp3", { album: "b,c" }),
+    ];
+    const result = buildCatalog(tracks, folder);
+    expect(result.albums).toHaveLength(tracks.length - 1);
+    expect(result.albums[0]?.tracks).toHaveLength(2);
+  });
+  it("reclassifies metadata arriving after scanning and folder replacements", () => {
+    const a = shallowReactive(track("mix/a.mp3"));
+    const b = shallowReactive(track("mix/b.mp3"));
+    const catalog = computed(() => buildCatalog([a, b], folder));
+    expect(catalog.value.albums).toHaveLength(2);
+    expect(catalog.value.albums[0]?.sourceFile).toEqual({ name: "a", path: "mix/a.mp3" });
+    a.metadata = { album: "Mix", artist: "A" };
+    b.metadata = { album: "Mix", artist: "B" };
+    expect(catalog.value.albums).toHaveLength(1);
+    expect(catalog.value.albums[0]?.sourceFile).toBeUndefined();
+    b.metadata = { album: "Solo", artist: "B" };
+    expect(catalog.value.albums).toHaveLength(2);
+    b.metadata = { album: "Mix", artist: "B" };
+    b.path = "other/b.mp3";
+    expect(catalog.value.albums).toHaveLength(2);
   });
 });
