@@ -25,6 +25,8 @@ let player: ReturnType<typeof usePlayerStore>;
 let audio: HTMLAudioElement;
 let created: ReturnType<typeof vi.fn>;
 let createUrl: ReturnType<typeof vi.fn>;
+let systemScheme: EventTarget;
+let systemDark: boolean;
 function button(label: string, within: ParentNode = root) {
   const found = within.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
   if (!found) throw new Error(`Missing button: ${label}`);
@@ -37,6 +39,11 @@ async function tick() {
 }
 beforeEach(() => {
   history.replaceState({}, "", "/");
+  localStorage.clear();
+  systemDark = false;
+  systemScheme = new EventTarget();
+  Object.defineProperty(systemScheme, "matches", { get: () => systemDark });
+  vi.stubGlobal("matchMedia", () => systemScheme);
   vi.stubGlobal("indexedDB", new IDBFactory());
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
@@ -83,11 +90,76 @@ afterEach(() => {
   if (mounted) app.unmount();
   player.$dispose();
   root.remove();
+  document.documentElement.classList.remove("dark");
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("Now Playing", () => {
+  it("applies system and fixed themes to the open settings and dialog without changing playback or history", async () => {
+    const settings = useSettingsStore();
+    await settings.restore();
+    expect(settings.theme).toBe("system");
+    const html = document.documentElement;
+    const changeSystem = (dark: boolean) => {
+      systemDark = dark;
+      systemScheme.dispatchEvent(new Event("change"));
+    };
+    expect(html.classList.contains("dark")).toBe(false);
+    changeSystem(true);
+    expect(html.classList.contains("dark")).toBe(true);
+    changeSystem(false);
+    expect(html.classList.contains("dark")).toBe(false);
+
+    player.setTracks([track("first.mp3")]);
+    await player.playAt(0);
+    const { current, queue, order } = player;
+    const source = audio.src;
+    button("設定を開く").click();
+    await tick();
+    const settingsMain = root.querySelector("main[aria-labelledby='settings-title']")!;
+    const option = (theme: string) =>
+      settingsMain.querySelector<HTMLInputElement>(`input[name="theme"][value="${theme}"]`)!;
+    const settingEntry = history.state;
+    expect(option("system").checked).toBe(true);
+    option("dark").click();
+    await tick();
+    expect(html.classList.contains("dark")).toBe(true);
+    expect(option("dark").checked).toBe(true);
+    expect(history.state).toEqual(settingEntry);
+    changeSystem(true);
+    changeSystem(false);
+    expect(html.classList.contains("dark")).toBe(true);
+
+    option("light").click();
+    await tick();
+    expect(html.classList.contains("dark")).toBe(false);
+    changeSystem(true);
+    expect(html.classList.contains("dark")).toBe(false);
+    button("再生中の画面を開く").click();
+    await tick();
+    const dialog = root.querySelector("dialog")!;
+    const dialogEntry = history.state;
+    const historyLength = history.length;
+    expect(dialog.open).toBe(true);
+    await settings.setTheme("system");
+    await tick();
+    expect(html.classList.contains("dark")).toBe(true);
+    expect(option("system").checked).toBe(true);
+    expect(html.contains(dialog)).toBe(true);
+    expect(root.querySelector("dialog")).toBe(dialog);
+    expect(dialog.open).toBe(true);
+    expect(history.state).toEqual(dialogEntry);
+    expect(history.length).toBe(historyLength);
+    expect(player.current).toBe(current);
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(player.playing).toBe(true);
+    expect(audio.src).toBe(source);
+    expect(created).toHaveBeenCalledTimes(1);
+    expect(createUrl).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps the live player and library mounted through settings, mode changes and Android Back", async () => {
     const library = useLibraryStore();
     const settings = useSettingsStore();

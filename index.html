@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#2563eb" />
     <meta name="description" content="端末内の音楽をオフラインで楽しむプレーヤー" />
+    <script>
+      // Apply the last committed theme before loading styles and opening IndexedDB.
+      (() => {
+        let theme;
+        try {
+          theme = localStorage.getItem("offtone-theme");
+        } catch {
+          // Storage can be blocked. Fall back to the system appearance.
+        }
+        const dark =
+          theme === "dark" ||
+          (theme !== "light" && window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.toggle("dark", Boolean(dark));
+      })();
+    </script>
     <link rel="icon" href="%BASE_URL%icons/icon-192.png" />
     <title>offtone</title>
   </head>

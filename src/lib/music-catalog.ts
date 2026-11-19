@@ -13,6 +13,7 @@ const value = (text?: string) => text?.trim() || undefined;
 export const trackTitle = (track: Track) =>
   value(track.metadata?.title) ?? track.name.replace(/\.[^.]+$/, "");
 export const trackArtist = (track: Track) => value(track.metadata?.artist) ?? UNKNOWN_ARTIST;
+export const trackAlbum = (track: Track) => value(track.metadata?.album) ?? UNKNOWN_ALBUM;
 
 export interface Album {
   key: string;
@@ -56,7 +57,7 @@ export function matchesTrack(track: Track, query: string): boolean {
   return [
     trackTitle(track),
     trackArtist(track),
-    value(track.metadata?.album) ?? UNKNOWN_ALBUM,
+    trackAlbum(track),
     track.metadata?.albumArtist,
     track.path,
   ].some((text) => text?.toLowerCase().includes(term));
@@ -75,7 +76,7 @@ export function buildCatalog(
     if (!album) {
       album = {
         key,
-        name: value(track.metadata?.album) ?? UNKNOWN_ALBUM,
+        name: trackAlbum(track),
         artist:
           value(track.metadata?.albumArtist) ?? value(track.metadata?.artist) ?? UNKNOWN_ARTIST,
         tracks: [],

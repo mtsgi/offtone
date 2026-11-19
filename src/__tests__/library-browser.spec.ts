@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createApp, h, nextTick, ref, vaporInteropPlugin } from "vue";
 import { createPinia } from "pinia";
+import { IDBFactory } from "fake-indexeddb";
 import { createMemoryHistory, createRouter } from "vue-router";
 import ui from "@nuxt/ui/vue-plugin";
 import LibraryBrowser from "../components/LibraryBrowser.vue";
@@ -17,6 +18,7 @@ const track = (path: string, title: string, album: string): Track => ({
 let root: HTMLElement;
 let app: ReturnType<typeof createApp>;
 let player: ReturnType<typeof usePlayerStore>;
+let settings: ReturnType<typeof useSettingsStore>;
 let audio: HTMLAudioElement;
 let created: ReturnType<typeof vi.fn>;
 let directory: ReturnType<typeof ref<MusicDirectory | undefined>>;
@@ -38,7 +40,8 @@ async function filterLibrary(value: string) {
   search.dispatchEvent(new Event("input"));
   await tick();
 }
-beforeEach(() => {
+beforeEach(async () => {
+  vi.stubGlobal("indexedDB", new IDBFactory());
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
@@ -59,6 +62,8 @@ beforeEach(() => {
   document.body.append(root);
   const pinia = createPinia();
   player = usePlayerStore(pinia);
+  settings = useSettingsStore(pinia);
+  await settings.restore();
   player.setTracks([
     track("one.mp3", "First", "One"),
     track("two.mp3", "Second", "Two"),
@@ -83,6 +88,94 @@ afterEach(() => {
 });
 
 describe("library browser", () => {
+  it.each(["metadata", "folder"] as const)(
+    "updates each filtered view and open details without changing playback in %s mode",
+    async (mode) => {
+      const music = [
+        track("a/ten.mp3", "Song10", "Record10"),
+        track("a/two.mp3", "Song2", "Record10"),
+        track("b/one.mp3", "Song1", "Record2"),
+        track("b/other.mp3", "Unmatched", "Record2"),
+      ];
+      music[0]!.metadata!.artist = "Artist10";
+      music[1]!.metadata!.artist = "Artist10";
+      music[2]!.metadata!.artist = "Artist2";
+      music[3]!.metadata!.artist = "Artist2";
+      player.setTracks(music);
+      await settings.setAlbumGrouping(mode);
+      await player.playAt(0);
+      player.addTrack(player.tracks[1]!);
+      player.setShuffle(true);
+      player.setRepeat("one");
+      audio.currentTime = 25;
+      audio.dispatchEvent(new Event("timeupdate"));
+      const { tracks, queue, order, current, currentId } = player;
+      const source = audio.src;
+      await filterLibrary("Song");
+      const titles = () =>
+        [...root.querySelectorAll('[aria-label="曲一覧"] li .min-w-0 > .font-medium')].map(
+          (item) => item.textContent,
+        );
+      const groups = () =>
+        [...root.querySelectorAll("[data-library-group] .font-semibold")].map(
+          (item) => item.textContent,
+        );
+      expect(titles()).toEqual(["Song10", "Song2", "Song1"]);
+      const saveTrackSort = settings.setSortKey("tracks", "title");
+      await tick();
+      expect(titles()).toEqual(["Song1", "Song2", "Song10"]);
+      expect(root.querySelector('[aria-current="true"]')?.textContent).toContain("Song10");
+      await saveTrackSort;
+
+      findButton("アルバム").click();
+      await tick();
+      expect(groups()).toEqual(["Record10", "Record2"]);
+      void settings.setSortKey("albums", "album");
+      await tick();
+      expect(groups()).toEqual(["Record2", "Record10"]);
+      findButton("Record10").click();
+      await tick();
+      expect(titles()).toEqual(["Song2", "Song10"]);
+      void settings.setSortDirection("tracks", "desc");
+      await tick();
+      expect(root.querySelector("#library-panel h2")?.textContent).toBe("Record10");
+      expect(titles()).toEqual(["Song10", "Song2"]);
+
+      findButton("アーティスト").click();
+      await tick();
+      expect(groups()).toEqual(["Artist10", "Artist2"]);
+      void settings.setSortKey("artists", "artist");
+      await tick();
+      expect(groups()).toEqual(["Artist2", "Artist10"]);
+      findButton("Artist10").click();
+      await tick();
+      await settings.setSortDirection("tracks", "asc");
+      await tick();
+      expect(root.querySelector("#library-panel h2")?.textContent).toBe("Artist10");
+      expect(titles()).toEqual(["Song2", "Song10"]);
+      expect(root.querySelector<HTMLInputElement>("#library-search")?.value).toBe("Song");
+      expect(root.querySelector('[role="tab"][aria-selected="true"]')?.id).toBe(
+        "library-tab-artists",
+      );
+      expect(player.tracks).toBe(tracks);
+      expect(player.queue).toBe(queue);
+      expect(player.order).toBe(order);
+      expect(player.current).toBe(current);
+      expect(player.currentId).toBe(currentId);
+      expect(player.currentTime).toBe(25);
+      expect(player.playing).toBe(true);
+      expect(player.shuffle).toBe(true);
+      expect(player.repeat).toBe("one");
+      expect(audio.src).toBe(source);
+      expect(vi.mocked(URL).createObjectURL).toHaveBeenCalledTimes(1);
+
+      findButton("Song2").click();
+      await vi.waitFor(() => expect(player.current?.path).toBe("a/two.mp3"));
+      expect(player.queue).toBe(queue);
+      expect(player.order).toBe(order);
+      expect(created).toHaveBeenCalledTimes(1);
+    },
+  );
   it.each(["metadata", "folder"] as const)(
     "keeps artist album counts, list and detail in sync as searches change in %s mode",
     async (mode) => {

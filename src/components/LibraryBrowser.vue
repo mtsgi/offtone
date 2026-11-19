@@ -3,6 +3,7 @@ import UButton from "@nuxt/ui/components/Button.vue";
 import UIcon from "@nuxt/ui/components/Icon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { MusicDirectory, Track } from "../lib/library";
+import { sortAlbums, sortArtists, sortTracks } from "../lib/library-sort";
 import { buildCatalog, matchesTrack } from "../lib/music-catalog";
 import { useSettingsStore } from "../stores/settings";
 import ArtworkImage from "./ArtworkImage.vue";
@@ -24,6 +25,7 @@ const catalog = computed(() =>
   buildCatalog(props.tracks, { albumGrouping: settings.albumGrouping }),
 );
 const filtered = computed(() => props.tracks.filter((track) => matchesTrack(track, query.value)));
+const trackResults = computed(() => sortTracks(filtered.value, settings.librarySort.tracks));
 const results = computed(() => {
   const matches = new Set(filtered.value);
   // Filter groups from the complete catalog so a search keeps the album's display
@@ -47,10 +49,20 @@ const artist = computed(() => catalog.value.artists.find((item) => item.key === 
 const artistResult = computed(() =>
   results.value.artists.find((item) => item.key === selected.value),
 );
+const albumResults = computed(() => sortAlbums(results.value.albums, settings.librarySort.albums));
+const artistResults = computed(() =>
+  sortArtists(results.value.artists, settings.librarySort.artists),
+);
+const relatedAlbums = computed(() =>
+  sortAlbums(artistResult.value?.albums ?? [], settings.librarySort.albums),
+);
 const detailTracks = computed(() =>
-  view.value === "albums"
-    ? (album.value?.tracks.filter((track) => matchesTrack(track, query.value)) ?? [])
-    : (artistResult.value?.tracks ?? []),
+  sortTracks(
+    view.value === "albums"
+      ? (album.value?.tracks.filter((track) => matchesTrack(track, query.value)) ?? [])
+      : (artistResult.value?.tracks ?? []),
+    settings.librarySort.tracks,
+  ),
 );
 function setView(id: View) {
   view.value = id;
@@ -180,7 +192,7 @@ watch([catalog, selected, view], () => {
           <h3 class="font-semibold">アルバム</h3>
           <ul aria-label="関連アルバム" class="flex flex-wrap gap-2">
             <li
-              v-for="item in artistResult?.albums ?? []"
+              v-for="item in relatedAlbums"
               :key="item.key"
               class="rounded bg-elevated px-3 py-2 text-sm"
             >
@@ -199,17 +211,17 @@ watch([catalog, selected, view], () => {
         <TrackList v-else :tracks="detailTracks" />
       </template>
       <template v-else-if="view === 'tracks'"
-        ><p v-if="!filtered.length" class="py-6 text-sm text-muted">
+        ><p v-if="!trackResults.length" class="py-6 text-sm text-muted">
           検索に一致する曲がありません。
         </p>
-        <TrackList v-else :tracks="filtered"
+        <TrackList v-else :tracks="trackResults"
       /></template>
       <template v-else-if="view === 'albums'"
-        ><p v-if="!results.albums.length" class="py-6 text-sm text-muted">
+        ><p v-if="!albumResults.length" class="py-6 text-sm text-muted">
           検索に一致するアルバムがありません。
         </p>
         <ul v-else class="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          <li v-for="item in results.albums" :key="item.key">
+          <li v-for="item in albumResults" :key="item.key">
             <button
               type="button"
               class="w-full rounded text-left focus-visible:outline-2"
@@ -234,12 +246,12 @@ watch([catalog, selected, view], () => {
         </ul></template
       >
       <template v-else
-        ><p v-if="!results.artists.length" class="py-6 text-sm text-muted">
+        ><p v-if="!artistResults.length" class="py-6 text-sm text-muted">
           検索に一致するアーティストがありません。
         </p>
         <p class="mb-2 text-xs text-muted">曲のアーティストとアルバムアーティストを表示します。</p>
         <ul class="divide-y divide-default">
-          <li v-for="item in results.artists" :key="item.key">
+          <li v-for="item in artistResults" :key="item.key">
             <button
               type="button"
               class="flex min-h-16 w-full items-center gap-3 rounded px-2 py-2 text-left focus-visible:outline-2"
