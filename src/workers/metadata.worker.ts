@@ -1,21 +1,14 @@
-import { parseBlob } from "music-metadata";
 import type { MetadataRequest, MetadataResponse } from "./metadata-protocol";
-
-import { MAX_COVER_INPUT, thumbnail } from "./artwork";
+import { thumbnail } from "./artwork";
+import { parseTrackFile } from "./metadata-file";
 
 self.onmessage = async (event: MessageEvent<MetadataRequest>) => {
   const { id, file } = event.data;
   let response: MetadataResponse;
   try {
-    const parsed = await parseBlob(file, {
-      duration: false,
-      maxMemoryAllocation: MAX_COVER_INPUT,
-      maxMetadataEntries: 4096,
-    });
-    const { title, artist, album, albumartist, picture } = parsed.common;
-    const cover = picture?.[0];
+    const { metadata, cover } = await parseTrackFile(file);
     const artwork = cover ? await thumbnail(cover.data, cover.format) : undefined;
-    response = { id, metadata: { title, artist, album, albumArtist: albumartist }, artwork };
+    response = { id, metadata, artwork };
   } catch (error) {
     response = { id, error: error instanceof Error ? error.message : "Parse failed" };
   }
