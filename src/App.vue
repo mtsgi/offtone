@@ -1,11 +1,12 @@
 <script setup vapor lang="ts">
 import UApp from "@nuxt/ui/components/App.vue";
-import { nextTick, onMounted, onScopeDispose, ref } from "vue";
+import { nextTick, onMounted, onScopeDispose, ref, watchEffect } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
 import SettingsView from "./components/SettingsView.vue";
+import { applyTheme } from "./lib/theme";
 import { createViewHistory } from "./lib/view-history";
 import { useSettingsStore } from "./stores/settings";
 import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
@@ -23,6 +24,17 @@ const viewHistory = createViewHistory(window, (view) => {
   if (leavingSettings) void nextTick(() => document.getElementById("settings-button")?.focus());
 });
 onScopeDispose(() => viewHistory.dispose());
+
+const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+watchEffect((onCleanup) => {
+  const theme = settings.theme;
+  const update = () => applyTheme(theme, systemTheme?.matches ?? false);
+  update();
+  if (theme === "system" && systemTheme) {
+    systemTheme.addEventListener("change", update);
+    onCleanup(() => systemTheme.removeEventListener("change", update));
+  }
+});
 
 onMounted(() => {
   void settings.restore();

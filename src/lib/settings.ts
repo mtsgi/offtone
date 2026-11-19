@@ -1,17 +1,79 @@
 import type { AlbumGrouping } from "./music-catalog";
 
+export const SORT_KEYS = {
+  tracks: ["library", "title", "artist", "album"],
+  albums: ["library", "album", "artist"],
+  artists: ["library", "artist"],
+} as const;
+export type SortView = keyof typeof SORT_KEYS;
+export type SortKey<V extends SortView> = (typeof SORT_KEYS)[V][number];
+export type SortDirection = "asc" | "desc";
+export interface SortOrder<V extends SortView> {
+  key: SortKey<V>;
+  direction: SortDirection;
+}
+
+export type Theme = "system" | "light" | "dark";
+
 export interface AppSettings {
   albumGrouping: AlbumGrouping;
+  librarySort: { [V in SortView]: SortOrder<V> };
+  theme: Theme;
 }
-export const DEFAULT_SETTINGS: Readonly<AppSettings> = { albumGrouping: "metadata" };
+export const DEFAULT_SETTINGS = {
+  albumGrouping: "metadata",
+  librarySort: {
+    tracks: { key: "library", direction: "asc" },
+    albums: { key: "library", direction: "asc" },
+    artists: { key: "library", direction: "asc" },
+  },
+  theme: "system",
+} as const satisfies AppSettings;
 
 export function isAlbumGrouping(value: unknown): value is AlbumGrouping {
   return value === "metadata" || value === "folder";
 }
+
+export function isSortView(value: unknown): value is SortView {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(SORT_KEYS, value);
+}
+
+export function isSortKey<V extends SortView>(view: V, value: unknown): value is SortKey<V> {
+  return SORT_KEYS[view].some((key) => key === value);
+}
+
+export function isSortDirection(value: unknown): value is SortDirection {
+  return value === "asc" || value === "desc";
+}
+
+export function isTheme(value: unknown): value is Theme {
+  return value === "system" || value === "light" || value === "dark";
+}
+
+function fields(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function parseSort<V extends SortView>(view: V, value: unknown): SortOrder<V> {
+  const { key, direction } = fields(value);
+  return {
+    key: isSortKey(view, key) ? key : DEFAULT_SETTINGS.librarySort[view].key,
+    direction: isSortDirection(direction)
+      ? direction
+      : DEFAULT_SETTINGS.librarySort[view].direction,
+  };
+}
+
 export function parseSettings(value: unknown): AppSettings {
-  const grouping =
-    value && typeof value === "object" && "albumGrouping" in value
-      ? value.albumGrouping
-      : undefined;
-  return { albumGrouping: isAlbumGrouping(grouping) ? grouping : DEFAULT_SETTINGS.albumGrouping };
+  const { albumGrouping, librarySort, theme } = fields(value);
+  const { tracks, albums, artists } = fields(librarySort);
+  return {
+    albumGrouping: isAlbumGrouping(albumGrouping) ? albumGrouping : DEFAULT_SETTINGS.albumGrouping,
+    librarySort: {
+      tracks: parseSort("tracks", tracks),
+      albums: parseSort("albums", albums),
+      artists: parseSort("artists", artists),
+    },
+    theme: isTheme(theme) ? theme : DEFAULT_SETTINGS.theme,
+  };
 }

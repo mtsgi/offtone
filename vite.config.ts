@@ -19,6 +19,8 @@ export default defineConfig({
     tailwindcss(),
     ui({
       dts: false,
+      // App.vue drives Nuxt UI's theme classes from IndexedDB preferences.
+      colorMode: false,
       ui: { colors: { primary: "blue" } },
       icon: {
         clientBundle: {
