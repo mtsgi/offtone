@@ -16,6 +16,13 @@ const shiftJis = {
   album: Buffer.from("8f7482cc89cc", "hex"),
   albumArtist: Buffer.from("93fa967b8d878fa59263", "hex"),
 };
+const reportedMojibake = "\u0083A\u0083J\u0083V\u0083b\u0083N\u0083\u008c\u0083R\u0081[\u0083h";
+const reportedTitle = Buffer.from("8341834a83568362834e838c8352815b8368", "hex");
+const reportedMetadata = {
+  title: "アカシックレコード",
+  artist: "神楽月 (吉岡美咲) & 星宮ゆきな (和氣あず未)",
+  album: "Precious Notes",
+};
 
 function fixture(name: string) {
   return readFile(new URL(`./fixtures/${name}`, import.meta.url));
@@ -51,6 +58,19 @@ function id3v1(title: Buffer, artist: Buffer = Buffer.alloc(0), album: Buffer = 
   artist.copy(trailer, 33, 0, 30);
   album.copy(trailer, 63, 0, 30);
   return trailer;
+}
+
+function apev2(key: string, value: string) {
+  const bytes = Buffer.from(value);
+  const item = Buffer.alloc(8);
+  item.writeUInt32LE(bytes.length);
+  const entry = Buffer.concat([item, Buffer.from(`${key}\0`), bytes]);
+  const footer = Buffer.alloc(32);
+  footer.write("APETAGEX");
+  footer.writeUInt32LE(2000, 8);
+  footer.writeUInt32LE(entry.length + footer.length, 12);
+  footer.writeUInt32LE(1, 16);
+  return Buffer.concat([entry, footer]);
 }
 
 async function mp3(leading?: Buffer, trailer?: Buffer) {
@@ -143,6 +163,70 @@ describe("track metadata from generated audio files", () => {
       album: japanese.album,
     });
   });
+  it.each([
+    { name: "single ID3v2 title", copies: 1, withId3v1: false },
+    { name: "matching ID3v1 and ID3v2 titles", copies: 1, withId3v1: true },
+    { name: "matching duplicate ID3v2 frames", copies: 2, withId3v1: false },
+    {
+      name: "matching titles in both ID3 versions and duplicate frames",
+      copies: 2,
+      withId3v1: true,
+    },
+  ])("recovers the reported title with $name", async ({ copies, withId3v1 }) => {
+    const title = id3Frame(4, "TIT2", 0, reportedTitle);
+    const file = await mp3(
+      id3v2(4, [
+        ...Array<Buffer>(copies).fill(title),
+        id3Frame(4, "TPE1", 3, Buffer.from(reportedMetadata.artist)),
+        id3Frame(4, "TALB", 0, Buffer.from(reportedMetadata.album)),
+      ]),
+      withId3v1 ? id3v1(reportedTitle) : undefined,
+    );
+    const { common, native } = await parseBlob(file);
+    expect(common.title).toBe(reportedMojibake);
+    expect(native["ID3v2.4"]?.filter(({ id }) => id === "TIT2")).toHaveLength(copies);
+    if (withId3v1) expect(native.ID3v1).toContainEqual({ id: "title", value: reportedMojibake });
+    expect((await parseTrackFile(file)).metadata).toMatchObject(reportedMetadata);
+  });
+
+  it("requires recovery evidence for each matching native title", async () => {
+    const legacy = id3Frame(4, "TIT2", 0, reportedTitle);
+    const literal = id3Frame(4, "TIT2", 3, Buffer.from(reportedMojibake));
+    const files = [
+      await mp3(id3v2(4, [literal]), id3v1(reportedTitle)),
+      await mp3(id3v2(4, [legacy, literal])),
+      await mp3(Buffer.concat([id3v2(4, [legacy]), id3v2(4, [literal])])),
+      await mp3(id3v2(4, [legacy]), id3v1(Buffer.concat([reportedTitle, Buffer.of(0, 0x41)]))),
+      await mp3(id3v2(4, [id3Frame(4, "TIT2", 0, reportedTitle, 0x02)]), id3v1(reportedTitle)),
+      await mp3(id3v2(4, [Buffer.of(0, 0, 0, 6, 1, 0), legacy], 0x40), id3v1(reportedTitle)),
+    ];
+    for (const file of files) {
+      const { common } = await parseBlob(file);
+      expect(common.title).toBe(reportedMojibake);
+      expect((await parseTrackFile(file)).metadata.title).toBe(common.title);
+    }
+  });
+
+  it("retains the parser result when matching invalid UTF-8 frames recover to different titles", async () => {
+    const first = id3Frame(4, "TIT2", 3, Buffer.from("82a082a2", "hex")); // あい
+    const second = id3Frame(4, "TIT2", 3, Buffer.from("82a482a6", "hex")); // うえ
+    const file = await mp3(id3v2(4, [first, second]));
+    const { common, native } = await parseBlob(file);
+    expect(common.title).toBe("\ufffd\ufffd\ufffd\ufffd");
+    expect(native["ID3v2.4"]).toEqual(Array(2).fill({ id: "TIT2", value: common.title }));
+    expect((await parseTrackFile(file)).metadata.title).toBe(common.title);
+  });
+
+  it.each([
+    ["Comment", "APEv2 without a title"],
+    ["Title", reportedMojibake],
+  ])("retains the parser result when an APEv2 %s is present", async (key, value) => {
+    const file = await mp3(id3v2(4, [id3Frame(4, "TIT2", 0, reportedTitle)]), apev2(key, value));
+    const { common, format } = await parseBlob(file);
+    expect(format.tagTypes).toContain("APEv2");
+    expect(common.title).toBe(reportedMojibake);
+    expect((await parseTrackFile(file)).metadata.title).toBe(common.title);
+  });
   it("retains the original embedded artwork when correcting text", async () => {
     const { common } = await parseBlob(new Blob([await fixture("tagged.mp3")]));
     const cover = common.picture![0]!;
@@ -172,7 +256,7 @@ describe("track metadata from generated audio files", () => {
     const file = await mp3(id3v2(4, [id3Frame(4, "TIT2", encoding, bytes)]));
     expect((await parseTrackFile(file)).metadata.title).toBe((await parseBlob(file)).common.title);
   });
-  it("retains text when the frame is flagged or another native tag has the same value", async () => {
+  it("retains text when the frame is flagged or duplicate frames have different values", async () => {
     const files = [
       await mp3(id3v2(4, [id3Frame(4, "TIT2", 0, shiftJis.title, 0x02)])),
       await mp3(
@@ -180,10 +264,6 @@ describe("track metadata from generated audio files", () => {
           id3Frame(4, "TIT2", 0, Buffer.from("First")),
           id3Frame(4, "TIT2", 0, shiftJis.title),
         ]),
-      ),
-      await mp3(
-        id3v2(4, [id3Frame(4, "TIT2", 3, Buffer.from(shiftJis.title.toString("latin1")))]),
-        id3v1(shiftJis.title),
       ),
     ];
     for (const file of files) {

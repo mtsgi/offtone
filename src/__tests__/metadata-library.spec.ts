@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPinia, setActivePinia } from "pinia";
 import { nextTick, watchEffect } from "vue";
-import type { TrackRecord } from "../lib/catalog";
+import { trackId, type TrackRecord } from "../lib/catalog";
 import type { MusicDirectory, Track } from "../lib/library";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
@@ -88,34 +88,37 @@ describe("metadata cache integration", () => {
     expect(mocks.parse).toHaveBeenCalledTimes(3);
     library.$dispose();
   });
-  it.each([1, 2])(
+  it.each([1, 2, 3])(
     "updates parser version %i cached metadata in place and reuses the new result",
     async (metadataVersion) => {
       let cached: TrackRecord = {
-        id: "old",
+        id: trackId("root", track.path),
         rootId: "root",
         path: track.path,
         size: file.size,
         lastModified: file.lastModified,
         metadataVersion,
-        metadata: { title: "\u0096é\u0082Ì\u0089¹\u008ay" },
+        metadata: { title: "\u0083A\u0083J\u0083V\u0083b\u0083N\u0083\u008c\u0083R\u0081[\u0083h" },
       };
       mocks.get.mockImplementation(async () => cached);
       mocks.put.mockImplementation(async (record: TrackRecord) => {
         cached = record;
       });
-      mocks.parse.mockResolvedValue({ metadata: { title: "夜の音楽", albumArtist: "日本合唱団" } });
+      mocks.parse.mockResolvedValue({
+        metadata: { title: "アカシックレコード", albumArtist: "日本合唱団" },
+      });
       const library = useLibraryStore();
       await library.selectFolder();
       await waitForAnalysis();
       expect(mocks.parse).toHaveBeenCalledTimes(1);
       expect(usePlayerStore().tracks[0]?.metadata).toEqual({
-        title: "夜の音楽",
+        title: "アカシックレコード",
         albumArtist: "日本合唱団",
       });
       expect(mocks.put).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadataVersion: 3,
+          id: trackId("root", track.path),
+          metadataVersion: 4,
           size: file.size,
           lastModified: file.lastModified,
         }),
