@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
-import { createPinia, setActivePinia } from "pinia";
+import { createPinia, disposePinia, getActivePinia, setActivePinia } from "pinia";
 import { scanDirectory, type MusicDirectory, type Track } from "../lib/library";
-import { loadDirectory, saveDirectory, StorageError } from "../lib/storage";
+import {
+  loadDirectory,
+  loadPlayback,
+  saveDirectory,
+  savePlayback,
+  StorageError,
+} from "../lib/storage";
+import { trackId } from "../lib/catalog";
+import type { SavedPlayback } from "../lib/playback-session";
 import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 
@@ -19,6 +27,8 @@ vi.mock("../lib/storage", () => ({
   deleteTrack: vi.fn(),
   loadDirectory: vi.fn(),
   saveDirectory: vi.fn(),
+  loadPlayback: vi.fn().mockResolvedValue(undefined),
+  savePlayback: vi.fn().mockResolvedValue("playback"),
   queryDirectoryPermission: (directory: MusicDirectory) =>
     directory.queryPermission({ mode: "read" }),
   requestDirectoryPermission: (directory: MusicDirectory) =>
@@ -41,6 +51,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  disposePinia(getActivePinia()!);
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -129,6 +141,208 @@ function playable(name: string): Track {
     } as unknown as FileSystemFileHandle,
   };
 }
+
+function savedSession(rootId = "root-id"): SavedPlayback {
+  const a = trackId(rootId, "a.mp3");
+  const b = trackId(rootId, "b.mp3");
+  return {
+    version: 1,
+    rootId,
+    library: [a, b],
+    queue: [b, a, a],
+    edited: true,
+    order: [2, 1, 0],
+    current: 2,
+    position: 37,
+    shuffle: true,
+    repeat: "all",
+    volume: 0.25,
+  };
+}
+
+function mockAudio(): HTMLAudioElement {
+  const audio = document.createElement("audio");
+  let paused = true;
+  Object.defineProperties(audio, {
+    paused: { get: () => paused },
+    duration: { value: 90 },
+  });
+  audio.play = vi.fn().mockImplementation(async () => {
+    paused = false;
+    audio.dispatchEvent(new Event("play"));
+  });
+  audio.pause = vi.fn().mockImplementation(() => {
+    if (paused) return;
+    paused = true;
+    audio.dispatchEvent(new Event("pause"));
+  });
+  vi.stubGlobal(
+    "Audio",
+    vi.fn(function () {
+      return audio;
+    }),
+  );
+  vi.stubGlobal(
+    "URL",
+    Object.assign(class extends URL {}, {
+      createObjectURL: vi.fn().mockReturnValue("blob:track"),
+      revokeObjectURL: vi.fn(),
+    }),
+  );
+  return audio;
+}
+
+describe("再生状態の永続化", () => {
+  it("初回は通常キューで起動し、再生前の初期状態を書き込まない", async () => {
+    const selected = folder("granted");
+    vi.mocked(loadDirectory).mockResolvedValue(undefined);
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(selected));
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    vi.mocked(scanDirectory).mockResolvedValue([playable("a.mp3")]);
+    const library = useLibraryStore();
+    await library.restore();
+    expect(loadPlayback).not.toHaveBeenCalled();
+    await library.selectFolder();
+    expect(loadPlayback).toHaveBeenCalledExactlyOnceWith("root-id");
+    expect(usePlayerStore().queue).toHaveLength(1);
+    await usePlayerStore().flushPlayback();
+    expect(savePlayback).not.toHaveBeenCalled();
+  });
+
+  it("権限拒否中は保存状態に触れず、再許可と走査の後に一度だけ復元する", async () => {
+    const saved = folder("denied");
+    const request = vi.fn().mockResolvedValueOnce("denied").mockResolvedValueOnce("granted");
+    saved.requestPermission = request;
+    vi.mocked(loadDirectory).mockResolvedValue(saved);
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    vi.mocked(loadPlayback).mockResolvedValueOnce(savedSession());
+    vi.mocked(scanDirectory).mockResolvedValue([playable("a.mp3"), playable("b.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    await library.restore();
+    await library.restorePermission();
+    expect(player.queue).toHaveLength(0);
+    expect(scanDirectory).not.toHaveBeenCalled();
+    expect(loadPlayback).not.toHaveBeenCalled();
+    expect(savePlayback).not.toHaveBeenCalled();
+
+    await library.restorePermission();
+    expect(loadPlayback).toHaveBeenCalledExactlyOnceWith("root-id");
+    expect(vi.mocked(scanDirectory).mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(loadPlayback).mock.invocationCallOrder[0]!,
+    );
+    expect(player).toMatchObject({ playing: false, currentTime: 37, repeat: "all", volume: 0.25 });
+    expect(player.currentId).toBe(player.queue[2]!.id);
+    await library.refresh();
+    expect(loadPlayback).toHaveBeenCalledTimes(1);
+    expect(player.currentId).toBe(player.queue[2]!.id);
+  });
+
+  it("遅い復元より手動選曲を優先し、その操作を保存する", async () => {
+    const play = vi.spyOn(mockAudio(), "play");
+    const loaded = deferred<SavedPlayback>();
+    vi.mocked(loadPlayback).mockReturnValueOnce(loaded.promise);
+    vi.mocked(loadDirectory).mockResolvedValue(folder("granted"));
+    vi.mocked(saveDirectory).mockResolvedValue("root-id");
+    vi.mocked(scanDirectory).mockResolvedValue([playable("a.mp3"), playable("b.mp3")]);
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    const restoring = library.restore();
+    await vi.waitFor(() => expect(loadPlayback).toHaveBeenCalled());
+    expect(savePlayback).not.toHaveBeenCalled();
+    await player.playAt(1);
+    loaded.resolve(savedSession());
+    await restoring;
+    await player.flushPlayback();
+    expect(player.current?.path).toBe("b.mp3");
+    expect(player).toMatchObject({ playing: true, currentTime: 0, shuffle: false });
+    expect(play).toHaveBeenCalledOnce();
+    expect(savePlayback).toHaveBeenLastCalledWith(
+      expect.objectContaining({ current: 1, position: 0 }),
+    );
+  });
+
+  it("同じ相対パスを含む別ルートに古い復元結果を適用しない", async () => {
+    const oldFolder = folder("granted");
+    oldFolder.isSameEntry = vi.fn().mockResolvedValue(false);
+    const newFolder = folder("granted");
+    const loaded = deferred<SavedPlayback>();
+    vi.mocked(loadDirectory).mockResolvedValue(oldFolder);
+    vi.mocked(saveDirectory).mockResolvedValueOnce("root-id").mockResolvedValueOnce("new-root");
+    vi.mocked(loadPlayback)
+      .mockReturnValueOnce(loaded.promise)
+      .mockResolvedValueOnce(savedSession());
+    vi.mocked(scanDirectory).mockResolvedValue([playable("a.mp3")]);
+    vi.stubGlobal("showDirectoryPicker", vi.fn().mockResolvedValue(newFolder));
+    const library = useLibraryStore();
+    const player = usePlayerStore();
+    const restoring = library.restore();
+    await vi.waitFor(() => expect(loadPlayback).toHaveBeenCalledWith("root-id"));
+    await library.selectFolder();
+    loaded.resolve(savedSession());
+    await restoring;
+    expect(loadPlayback).toHaveBeenLastCalledWith("new-root");
+    expect(player.tracks[0]?.id).toBe(trackId("new-root", "a.mp3"));
+    expect(player).toMatchObject({ currentId: null, currentTime: 0, playing: false });
+    await player.flushPlayback();
+    expect(savePlayback).not.toHaveBeenCalled();
+  });
+
+  it("位置を間引き、遅い保存の後に最新の位置と設定を保存する", async () => {
+    vi.useFakeTimers();
+    const audio = mockAudio();
+    const player = usePlayerStore();
+    player.setTracks([playable("a.mp3")]);
+    await player.restorePlayback("root-id");
+    await player.playAt(0);
+    await player.flushPlayback();
+    vi.mocked(savePlayback).mockClear();
+
+    const slow = deferred<string>();
+    vi.mocked(savePlayback).mockReturnValueOnce(slow.promise);
+    for (const seconds of [1, 2, 3]) {
+      audio.currentTime = seconds;
+      audio.dispatchEvent(new Event("timeupdate"));
+      await vi.advanceTimersByTimeAsync(1000);
+    }
+    expect(savePlayback).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(savePlayback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ position: 3 }));
+
+    player.setRepeat("one");
+    audio.currentTime = 8;
+    await player.toggle();
+    const flushing = player.flushPlayback();
+    expect(savePlayback).toHaveBeenCalledTimes(1);
+    slow.resolve("playback");
+    await flushing;
+    expect(savePlayback).toHaveBeenCalledTimes(2);
+    expect(savePlayback).toHaveBeenLastCalledWith(
+      expect.objectContaining({ position: 8, repeat: "one" }),
+    );
+  });
+
+  it("保存エラー時も再生でき、pagehide では最新位置を再試行する", async () => {
+    const audio = mockAudio();
+    const play = vi.spyOn(audio, "play");
+    vi.mocked(loadPlayback).mockRejectedValueOnce(new StorageError("unavailable"));
+    vi.mocked(savePlayback).mockRejectedValueOnce(new StorageError("quota"));
+    const player = usePlayerStore();
+    player.setTracks([playable("a.mp3")]);
+    await player.restorePlayback("root-id");
+    await player.playAt(0);
+    expect(player.playing).toBe(true);
+    expect(play).toHaveBeenCalledOnce();
+    expect(savePlayback).toHaveBeenCalledTimes(1);
+
+    audio.currentTime = 4;
+    window.dispatchEvent(new Event("pagehide"));
+    await vi.waitFor(() =>
+      expect(savePlayback).toHaveBeenLastCalledWith(expect.objectContaining({ position: 4 })),
+    );
+    await player.flushPlayback();
+  });
+});
 
 describe("ライブラリ更新の競合", () => {
   it("再スキャンで再生中の音源と曲を維持し、更新したキューを反映する", async () => {

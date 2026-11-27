@@ -24,6 +24,8 @@ vi.mock("../lib/storage", () => ({
   StorageError: class extends Error {},
   loadDirectory: vi.fn(),
   saveDirectory: vi.fn().mockResolvedValue("root"),
+  loadPlayback: vi.fn().mockResolvedValue(undefined),
+  savePlayback: vi.fn().mockResolvedValue("playback"),
   queryDirectoryPermission: vi.fn(),
   requestDirectoryPermission: vi.fn(),
   getTrack: mocks.get,

@@ -15,6 +15,7 @@ export function createPwaUpdate(
   register: Register,
   workers: ServiceWorkerContainer,
   browser: Window,
+  beforeReload?: () => Promise<void>,
 ) {
   const state = reactive({
     available: false,
@@ -27,6 +28,19 @@ export function createPwaUpdate(
   let controller = workers.controller;
   let readyToReload = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let reloading = false;
+  let disposed = false;
+
+  async function reload() {
+    if (reloading) return;
+    reloading = true;
+    try {
+      if (beforeReload) await beforeReload();
+    } catch {
+      // A failed playback save must not prevent the app update.
+    }
+    if (!disposed) browser.location.reload();
+  }
 
   function fail() {
     clearTimeout(timer);
@@ -43,7 +57,7 @@ export function createPwaUpdate(
     state.available = true;
     if (state.applying) {
       clearTimeout(timer);
-      browser.location.reload();
+      void reload();
     }
   }
 
@@ -95,7 +109,7 @@ export function createPwaUpdate(
     state.confirming = false;
     state.error = "";
     if (!registration?.waiting) {
-      if (readyToReload) browser.location.reload();
+      if (readyToReload) void reload();
       else {
         state.applying = false;
         state.available = false;
@@ -142,6 +156,7 @@ export function createPwaUpdate(
       if (state.confirming) void apply();
     },
     dispose() {
+      disposed = true;
       clearTimeout(timer);
       workers.removeEventListener("controllerchange", controllerChanged);
       browser.removeEventListener("online", onOnline);

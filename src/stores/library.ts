@@ -51,6 +51,7 @@ export const useLibraryStore = defineStore("library", () => {
     artworkUrls.clear();
   }
   onScopeDispose(() => {
+    generation++;
     cancelAnalysis();
     clearArtwork();
   });
@@ -229,16 +230,20 @@ export const useLibraryStore = defineStore("library", () => {
     }
   }
 
+  async function finishScan(selected: MusicDirectory, run: number, remember = true): Promise<void> {
+    if (remember || !queueRootId) await saveSelection(selected, run);
+    if (run !== generation) return;
+    if (queueRootId) await player.restorePlayback(queueRootId);
+    if (run === generation) void analyze();
+  }
+
   /** 現在のフォルダーを読み込み、再生キューを更新する。 */
   async function refresh(): Promise<void> {
     const selected = directory.value;
     if (!selected) return;
     const run = begin();
     try {
-      if (await scan(selected, run)) {
-        if (!queueRootId) await saveSelection(selected, run);
-        if (run === generation) void analyze();
-      }
+      if (await scan(selected, run)) await finishScan(selected, run, false);
     } finally {
       if (run === generation) busy.value = false;
     }
@@ -254,8 +259,7 @@ export const useLibraryStore = defineStore("library", () => {
       };
       const selected = await picker.showDirectoryPicker({ mode: "read" });
       if (run !== generation || !(await scan(selected, run))) return;
-      await saveSelection(selected, run);
-      if (run === generation) void analyze();
+      await finishScan(selected, run);
     } catch (cause) {
       if (run === generation && !(cause instanceof DOMException && cause.name === "AbortError")) {
         status.value = "フォルダーを開けませんでした。別のフォルダーを選んでください。";
@@ -274,10 +278,7 @@ export const useLibraryStore = defineStore("library", () => {
       const permission = await requestDirectoryPermission(selected);
       if (run !== generation) return;
       if (permission === "granted") {
-        if (await scan(selected, run)) {
-          await saveSelection(selected, run);
-          if (run === generation) void analyze();
-        }
+        if (await scan(selected, run)) await finishScan(selected, run);
       } else {
         needsPermission.value = true;
         permissionState.value = permission;
@@ -317,10 +318,7 @@ export const useLibraryStore = defineStore("library", () => {
           directory.value = saved;
           folderName.value = saved.name;
         }
-        if (await scan(saved, run)) {
-          await saveSelection(saved, run);
-          if (run === generation) void analyze();
-        }
+        if (await scan(saved, run)) await finishScan(saved, run);
       } else {
         directory.value = saved;
         folderName.value = saved.name;

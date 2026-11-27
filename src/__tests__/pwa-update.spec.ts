@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPwaUpdate } from "../lib/pwa-update";
 
-function setup() {
+function setup(beforeReload?: () => Promise<void>) {
   vi.useFakeTimers();
   const workers = new EventTarget() as ServiceWorkerContainer;
   let controller: object | null = {};
@@ -20,7 +20,7 @@ function setup() {
     callbacks = options;
     return update;
   });
-  const updater = createPwaUpdate(register, workers, browser);
+  const updater = createPwaUpdate(register, workers, browser, beforeReload);
   callbacks.onRegisteredSW("/offtone/sw.js", registration);
   function changeController() {
     controller = {};
@@ -92,6 +92,27 @@ describe("PWA updates", () => {
     expect(update).toHaveBeenCalledTimes(1);
     changeController();
     expect(reload).toHaveBeenCalledTimes(1);
+    updater.dispose();
+  });
+
+  it("waits for the playback save before reloading and reloads even if saving fails", async () => {
+    let rejectSave!: (error: Error) => void;
+    const saving = new Promise<void>((_resolve, reject) => {
+      rejectSave = reject;
+    });
+    const save = vi.fn(() => saving);
+    const { updater, callbacks, changeController, reload } = setup(save);
+    callbacks.onNeedRefresh();
+    updater.requestUpdate(true);
+    updater.confirmUpdate();
+    expect(save).not.toHaveBeenCalled();
+    changeController();
+    changeController();
+    expect(save).toHaveBeenCalledOnce();
+    expect(reload).not.toHaveBeenCalled();
+    rejectSave(new Error("storage unavailable"));
+    await Promise.resolve();
+    expect(reload).toHaveBeenCalledOnce();
     updater.dispose();
   });
 

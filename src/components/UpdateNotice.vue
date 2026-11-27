@@ -8,7 +8,7 @@ import { usePlayerStore } from "../stores/player";
 const player = usePlayerStore();
 const updater =
   import.meta.env.PROD && "serviceWorker" in navigator
-    ? createPwaUpdate(registerSW, navigator.serviceWorker, window)
+    ? createPwaUpdate(registerSW, navigator.serviceWorker, window, player.flushPlayback)
     : undefined;
 onScopeDispose(() => updater?.dispose());
 </script>

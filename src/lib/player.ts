@@ -1,5 +1,7 @@
 import type { Track } from "./library";
 import { diagnostics } from "./diagnostics";
+import { trackId, type RootId } from "./catalog";
+import { capturePlayback, type SavedPlayback } from "./playback-session";
 
 export interface QueueEntry {
   readonly id: number;
@@ -24,6 +26,13 @@ export interface PlaybackState {
 }
 type PlaybackListener = (state: PlaybackState) => void;
 
+const stopped = {
+  playing: false,
+  currentTime: 0,
+  duration: null,
+  seeking: false,
+} as const;
+
 export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let state: PlaybackState = {
     tracks: [],
@@ -47,6 +56,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   let pending = false;
   let disposed = false;
   let edited = false;
+  let resumePosition: number | undefined;
   let metadataKey: string | null | undefined;
   const currentEntry = () => state.queue.find((entry) => entry.id === state.currentId);
   const currentTrack = () => currentEntry()?.track;
@@ -97,15 +107,19 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     syncMedia();
     for (const listener of listeners) listener(state);
   }
-  function releaseUrl(): void {
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-    objectUrl = undefined;
-  }
   function clearSource(): void {
+    const url = objectUrl;
+    objectUrl = undefined;
     audio.pause();
     audio.removeAttribute("src");
     audio.load();
-    releaseUrl();
+    if (url) URL.revokeObjectURL(url);
+  }
+  function cancelSelection(): void {
+    generation++;
+    pending = false;
+    resumePosition = undefined;
+    clearSource();
   }
   function libraryIndex(id: number | null, queue = state.queue, tracks = state.tracks): number {
     const entry = queue.find((item) => item.id === id);
@@ -123,9 +137,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     return { id: ++nextId, track };
   }
   function setTracks(tracks: Track[]): void {
-    generation++;
-    pending = false;
-    clearSource();
+    cancelSelection();
     edited = false;
     const queue = tracks.map(makeEntry);
     update({
@@ -134,19 +146,47 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       order: state.shuffle ? shuffled(queue.map((e) => e.id)) : queue.map((e) => e.id),
       currentId: null,
       index: -1,
-      playing: false,
       error: "",
-      currentTime: 0,
-      duration: null,
-      seeking: false,
+      ...stopped,
+    });
+  }
+  function restorePlayback(saved: SavedPlayback): void {
+    const byId = new Map(state.tracks.map((track) => [trackId(saved.rootId, track.path), track]));
+    const known = new Set([...saved.library, ...saved.queue]);
+    const entries = saved.queue.map((id) => {
+      const track = byId.get(id);
+      return track ? makeEntry(track) : undefined;
+    });
+    const additions = [...byId].flatMap(([id, track]) => (known.has(id) ? [] : [makeEntry(track)]));
+    const queue = [...entries.filter((entry) => entry !== undefined), ...additions];
+    const order = saved.shuffle
+      ? [
+          ...saved.order.flatMap((index) => {
+            const entry = entries[index];
+            return entry ? [entry.id] : [];
+          }),
+          ...shuffled(additions.map((entry) => entry.id)),
+        ]
+      : queue.map((entry) => entry.id);
+    const currentId = saved.current === null ? null : (entries[saved.current]?.id ?? null);
+    cancelSelection();
+    edited = saved.edited;
+    if (currentId !== null && saved.position > 0) resumePosition = saved.position;
+    if (saved.volume !== undefined) audio.volume = saved.volume;
+    update({
+      ...stopped,
+      queue,
+      order,
+      currentId,
+      index: libraryIndex(currentId, queue),
+      currentTime: resumePosition ?? 0,
+      error: "",
+      shuffle: saved.shuffle,
+      repeat: saved.repeat,
+      volume: audio.volume,
     });
   }
   function updateTracks(tracks: Track[]): void {
-    const current = currentTrack();
-    if (current && !tracks.some((track) => track.path === current.path)) {
-      setTracks(tracks);
-      return;
-    }
     const oldPaths = new Set(state.tracks.map((track) => track.path));
     const byPath = new Map(tracks.map((track) => [track.path, track]));
     let queue: QueueEntry[];
@@ -177,12 +217,17 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
         ...shuffled(queue.map((entry) => entry.id).filter((id) => !orderedIds.has(id))),
       ];
     }
+    const removedCurrent = state.currentId !== null && !ids.has(state.currentId);
+    if (removedCurrent) cancelSelection();
+    const currentId = removedCurrent ? null : state.currentId;
     update({
       tracks,
       queue,
       order,
-      index: libraryIndex(state.currentId, queue, tracks),
-      error: state.playing ? "" : state.error,
+      currentId,
+      index: libraryIndex(currentId, queue, tracks),
+      error: removedCurrent || state.playing ? "" : state.error,
+      ...(removedCurrent ? stopped : {}),
     });
   }
   function setShuffle(shuffle: boolean): void {
@@ -209,19 +254,14 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const queue = state.queue.filter((entry) => entry.id !== id);
     const order = state.order.filter((item) => item !== id);
     if (state.currentId === id) {
-      generation++;
-      pending = false;
-      clearSource();
+      cancelSelection();
       update({
         queue,
         order,
         currentId: null,
         index: -1,
-        playing: false,
         error: "",
-        currentTime: 0,
-        duration: null,
-        seeking: false,
+        ...stopped,
       });
     } else update({ queue, order });
   }
@@ -240,14 +280,19 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const run = ++generation;
     pending = true;
     clearSource();
-    update({ playing: false, currentTime: 0, duration: null, seeking: false });
     const attempted = new Set<number>();
     let candidate: number | undefined = id;
     while (candidate !== undefined && !attempted.has(candidate)) {
       const entry = state.queue.find((item) => item.id === candidate);
       if (!entry || run !== generation) return;
       attempted.add(candidate);
-      update({ currentId: candidate, index: libraryIndex(candidate) });
+      if (candidate !== state.currentId) resumePosition = undefined;
+      update({
+        ...stopped,
+        currentId: candidate,
+        index: libraryIndex(candidate),
+        currentTime: resumePosition ?? 0,
+      });
       log("track-switch");
       if (run !== generation) return;
       let reading = true;
@@ -273,8 +318,9 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
           });
           return;
         }
+        resumePosition = undefined;
         clearSource();
-        update({ playing: false, error: `「${entry.track.name}」を再生できませんでした。` });
+        update({ ...stopped, error: `「${entry.track.name}」を再生できませんでした。` });
         const position = state.order.indexOf(candidate);
         candidate = state.order[position + 1];
       }
@@ -299,13 +345,14 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       generation++;
       pending = false;
       clearSource();
-      update({ playing: false, currentTime: 0, duration: null, seeking: false });
+      if (state.currentTime > 0) resumePosition = state.currentTime;
+      update({ ...stopped, currentTime: resumePosition ?? 0 });
     } else audio.pause();
   }
   async function toggle(): Promise<void> {
     if (disposed) return;
     if (state.playing || pending) pause();
-    else if (state.currentId === null || !audio.src) {
+    else if (state.currentId === null || !objectUrl) {
       const id = state.currentId ?? state.order[0];
       if (id !== undefined && id !== null) await playId(id);
     } else {
@@ -314,7 +361,10 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       pending = true;
       try {
         await audio.play();
-        if (run === generation) pending = false;
+        if (run === generation) {
+          pending = false;
+          updatePosition();
+        }
       } catch (cause) {
         if (run !== generation) return;
         log("play-failure", cause);
@@ -364,8 +414,17 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     update({ volume: audio.volume });
   }
   function updatePosition(): void {
-    if (!objectUrl || pending || audio.error) return;
+    if (!objectUrl || audio.error) return;
     const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : null;
+    if (resumePosition !== undefined) {
+      if (duration === null) return;
+      try {
+        audio.currentTime = Math.min(duration, resumePosition);
+      } catch {
+        // The resource may no longer be seekable.
+      }
+      resumePosition = undefined;
+    } else if (pending) return;
     const currentTime = Number.isFinite(audio.currentTime)
       ? Math.max(0, duration === null ? audio.currentTime : Math.min(duration, audio.currentTime))
       : 0;
@@ -380,7 +439,9 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     if (objectUrl && !audio.paused) update({ playing: true });
   }
   function onPause(): void {
-    if (audio.paused) update({ playing: false });
+    if (!objectUrl || !audio.paused) return;
+    updatePosition();
+    update({ playing: false });
   }
   function onEnded(): void {
     if (objectUrl && !pending && audio.ended) advance(true);
@@ -388,15 +449,10 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   function onError(): void {
     const track = currentTrack();
     if (!track || !objectUrl || !audio.error) return;
-    generation++;
-    pending = false;
-    clearSource();
+    cancelSelection();
     update({
-      playing: false,
+      ...stopped,
       error: `「${track.name}」を再生できませんでした。`,
-      currentTime: 0,
-      duration: null,
-      seeking: false,
     });
     // Error recovery never repeats a broken file.
     const pos = state.order.indexOf(state.currentId ?? -1);
@@ -521,7 +577,10 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     },
     setTracks,
     updateTracks,
+    restorePlayback,
+    capturePlayback: (rootId: RootId) => capturePlayback(rootId, state, edited),
     refreshMetadata: syncMedia,
+    refreshPosition: updatePosition,
     playAt,
     playId,
     toggle,

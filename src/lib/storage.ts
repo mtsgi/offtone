@@ -1,6 +1,7 @@
 import type { AppSettings } from "./settings";
 import type { MusicDirectory } from "./library";
 import type { RootId, TrackId, TrackRecord } from "./catalog";
+import type { SavedPlayback } from "./playback-session";
 
 const DATABASE = "offtone";
 const VERSION = 2;
@@ -206,5 +207,17 @@ export function loadSettings(): Promise<unknown> {
 export function saveSettings(settings: AppSettings): Promise<IDBValidKey> {
   return transaction([SETTINGS], "readwrite", (tx) =>
     tx.objectStore(SETTINGS).put(settings, APP_SETTINGS_KEY),
+  );
+}
+
+export function loadPlayback(rootId: RootId): Promise<unknown> {
+  return transaction([SETTINGS], "readonly", (tx) =>
+    tx.objectStore(SETTINGS).get(["playback", rootId]),
+  );
+}
+
+export function savePlayback(playback: SavedPlayback): Promise<IDBValidKey> {
+  return transaction([SETTINGS], "readwrite", (tx) =>
+    tx.objectStore(SETTINGS).put(playback, ["playback", playback.rootId]),
   );
 }
