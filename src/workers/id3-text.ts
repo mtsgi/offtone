@@ -89,7 +89,7 @@ async function readId3v2(file: Blob) {
   const body = new Uint8Array(await file.slice(10, 10 + size).arrayBuffer());
   const source = `ID3v2.${major}` as const;
   const ids = Object.values(tagIds[source]);
-  const frames = new Map<string, Uint8Array | undefined>();
+  const frames = new Map<string, (Uint8Array | undefined)[]>();
   const idSize = major === 2 ? 3 : 4;
   const sizeLength = major === 2 ? 3 : 4;
   const headerSize = major === 2 ? 6 : 10;
@@ -104,11 +104,31 @@ async function readId3v2(file: Blob) {
     if (length <= 0 || start + length > body.length) return;
     if (ids.includes(id)) {
       const flagged = major !== 2 && (body[offset + 8] !== 0 || body[offset + 9] !== 0);
-      frames.set(id, flagged || frames.has(id) ? undefined : body.subarray(start, start + length));
+      const entries = frames.get(id) ?? [];
+      entries.push(flagged ? undefined : body.subarray(start, start + length));
+      frames.set(id, entries);
     }
     offset = start + length;
   }
   return { source, frames };
+}
+
+function recoverFrames(
+  frames: (Uint8Array | undefined)[] | undefined,
+  count: number,
+  original: string,
+  trim: boolean,
+) {
+  // Each native value must be backed by a single readable frame.
+  if (frames?.length !== count) return;
+  let corrected: string | undefined;
+  for (const frame of frames) {
+    if (!frame) return;
+    const candidate = recoverText(frame.subarray(1), frame[0], original, trim);
+    if (candidate === undefined || (corrected !== undefined && corrected !== candidate)) return;
+    corrected = candidate;
+  }
+  return corrected;
 }
 
 async function readId3v1(file: Blob) {
@@ -133,31 +153,35 @@ export async function recoverId3Text(file: Blob, parsed: IAudioMetadata) {
   for (const field of fields) {
     const original = common[field];
     if (!original || (!c1Control.test(original) && !original.includes(replacement))) continue;
-    // Follow the library's common value, and leave it alone if several tags could have supplied it.
-    const matches = sources.filter((source) =>
-      parsed.native[source]?.some(
-        ({ id, value }) => id === tagIds[source][field] && value === original,
-      ),
-    );
-    const [source] = matches;
-    if (matches.length !== 1 || !source) continue;
-    const id = tagIds[source][field];
-    if (!id || parsed.native[source]?.filter((tag) => tag.id === id).length !== 1) continue;
-
+    // Follow the library's common value. Every matching source must support the same correction.
     let corrected: string | undefined;
-    if (source === "ID3v1") {
-      const trailer = await (v1 ??= readId3v1(file));
-      const offset = id3v1Offsets[field];
-      if (trailer && offset !== undefined) {
-        corrected = recoverText(trailer.subarray(offset, offset + 30), 0, original, true);
+    for (const source of sources) {
+      const id = tagIds[source][field];
+      const entries = parsed.native[source]?.filter((tag) => tag.id === id);
+      if (!id || !entries?.some(({ value }) => value === original)) continue;
+      if (entries.some(({ value }) => value !== original)) {
+        corrected = undefined;
+        break;
       }
-    } else {
-      const tag = await (v2 ??= readId3v2(file));
-      const frame = tag?.source === source ? tag.frames.get(id) : undefined;
-      if (frame) {
+
+      let candidate: string | undefined;
+      if (source === "ID3v1") {
+        const trailer = await (v1 ??= readId3v1(file));
+        const offset = id3v1Offsets[field];
+        if (trailer && offset !== undefined && entries.length === 1) {
+          candidate = recoverText(trailer.subarray(offset, offset + 30), 0, original, true);
+        }
+      } else {
+        const tag = await (v2 ??= readId3v2(file));
+        const frames = tag?.source === source ? tag.frames.get(id) : undefined;
         const trim = id === "TP1" || id === "TPE1" || (source === "ID3v2.4" && id !== "TIT2");
-        corrected = recoverText(frame.subarray(1), frame[0], original, trim);
+        candidate = recoverFrames(frames, entries.length, original, trim);
       }
+      if (candidate === undefined || (corrected !== undefined && corrected !== candidate)) {
+        corrected = undefined;
+        break;
+      }
+      corrected = candidate;
     }
     if (corrected !== undefined) common[field] = corrected;
   }
