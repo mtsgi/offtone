@@ -5,6 +5,9 @@ import { useLibraryStore } from "../stores/library";
 import { usePlayerStore } from "../stores/player";
 import LibraryBrowser from "./LibraryBrowser.vue";
 
+defineProps<{ folderPath: string }>();
+const emit = defineEmits<{ navigateFolder: [path: string] }>();
+
 const library = useLibraryStore();
 const player = usePlayerStore();
 const {
@@ -130,6 +133,12 @@ const { tracks, error: playerError } = storeToRefs(player);
         }}
       </p>
     </UCard>
-    <LibraryBrowser v-else-if="tracks.length" :tracks="tracks" :directory="directory" />
+    <LibraryBrowser
+      v-show="tracks.length > 0"
+      :tracks="tracks"
+      :directory="directory"
+      :folder-path="folderPath"
+      @navigate-folder="emit('navigateFolder', $event)"
+    />
   </UContainer>
 </template>

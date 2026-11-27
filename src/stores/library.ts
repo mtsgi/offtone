@@ -17,6 +17,8 @@ import { usePlayerStore } from "./player";
 export const useLibraryStore = defineStore("library", () => {
   const player = usePlayerStore();
   const directory = shallowRef<MusicDirectory>();
+  // Reselecting the same directory may return a new handle.
+  const rootRevision = ref(0);
   const folderName = ref("");
   const status = ref("");
   const busy = ref(false);
@@ -186,6 +188,7 @@ export const useLibraryStore = defineStore("library", () => {
       if (!same) queueRootId = undefined;
       queueDirectory = selected;
       directory.value = selected;
+      if (!same) rootRevision.value++;
       folderName.value = selected.name;
       needsPermission.value = false;
       permissionDirectory.value = undefined;
@@ -344,6 +347,7 @@ export const useLibraryStore = defineStore("library", () => {
 
   return {
     directory,
+    rootRevision,
     folderName,
     status,
     busy,

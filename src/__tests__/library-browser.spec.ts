@@ -22,6 +22,7 @@ let settings: ReturnType<typeof useSettingsStore>;
 let audio: HTMLAudioElement;
 let created: ReturnType<typeof vi.fn>;
 let directory: ReturnType<typeof ref<MusicDirectory | undefined>>;
+let folderPath: ReturnType<typeof ref<string>>;
 const tick = async () => {
   await nextTick();
   await Promise.resolve();
@@ -70,8 +71,15 @@ beforeEach(async () => {
     track("three.mp3", "Third", "Two"),
   ]);
   directory = ref({ name: "one" } as MusicDirectory);
+  folderPath = ref("");
   app = createApp({
-    setup: () => () => h(LibraryBrowser, { tracks: player.tracks, directory: directory.value }),
+    setup: () => () =>
+      h(LibraryBrowser, {
+        tracks: player.tracks,
+        directory: directory.value,
+        folderPath: folderPath.value,
+        onNavigateFolder: (path: string) => (folderPath.value = path),
+      }),
   })
     .use(vaporInteropPlugin)
     .use(pinia)
@@ -88,6 +96,124 @@ afterEach(() => {
 });
 
 describe("library browser", () => {
+  it("browses only the current folder and matching branches with the shared track sort and playback", async () => {
+    const rootTrack = track("root.mp3", "Root", "Library");
+    const untagged = track("Vol2/同じ/song.mp3", "", "");
+    untagged.metadata = undefined;
+    player.setTracks([
+      rootTrack,
+      track("Vol10/同じ/song.mp3", "Other volume", "Library"),
+      track("Vol2/同じ/ten.mp3", "Song10", "Library"),
+      track("Vol2/同じ/two.mp3", "Song2", "Library"),
+      untagged,
+    ]);
+    await player.playAt(0);
+    player.addTrack(player.tracks[1]!);
+    player.setShuffle(true);
+    player.setRepeat("all");
+    audio.currentTime = 25;
+    audio.dispatchEvent(new Event("timeupdate"));
+    const { queue, order, current, currentId } = player;
+    const source = audio.src;
+    const readFile = vi.spyOn(untagged.handle, "getFile");
+    const folderButtons = () => [...root.querySelectorAll<HTMLButtonElement>("[data-folder-path]")];
+    const titles = () =>
+      [...root.querySelectorAll('[aria-label="曲一覧"] li .min-w-0 > .font-medium')].map(
+        (item) => item.textContent,
+      );
+    const folderTab = root.querySelector<HTMLButtonElement>("#library-tab-folders")!;
+    const artistTab = root.querySelector<HTMLButtonElement>("#library-tab-artists")!;
+    artistTab.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    await tick();
+    expect(document.activeElement).toBe(folderTab);
+    expect(folderButtons().map((button) => button.dataset.folderPath)).toEqual(["Vol2", "Vol10"]);
+    expect(titles()).toEqual(["Root"]);
+
+    await filterLibrary("Song2");
+    expect(folderButtons().map((button) => button.dataset.folderPath)).toEqual(["Vol2"]);
+    expect(titles()).toEqual([]);
+    folderButtons()[0]!.focus();
+    folderButtons()[0]!.click();
+    await tick();
+    expect(document.activeElement?.textContent).toBe("Vol2");
+    folderButtons()[0]!.focus();
+    folderButtons()[0]!.click();
+    await tick();
+    expect(titles()).toEqual(["Song2"]);
+    expect(root.querySelectorAll('[aria-label="フォルダーの階層"] li')).toHaveLength(3);
+
+    await filterLibrary("missing");
+    expect(titles()).toEqual([]);
+    expect(root.textContent).toContain("検索に一致する曲がありません。");
+    root.querySelector<HTMLButtonElement>('button[aria-label="検索をクリア"]')!.click();
+    await tick();
+    expect(document.activeElement?.id).toBe("library-search");
+    await settings.setSortKey("tracks", "title");
+    await tick();
+    expect(folderPath.value).toBe("Vol2/同じ");
+    expect(titles()).toEqual(["song", "Song2", "Song10"]);
+    const up = findButton("上の階層へ");
+    up.focus();
+    up.click();
+    await tick();
+    expect(document.activeElement).toBe(folderButtons()[0]);
+    folderButtons()[0]!.click();
+    await tick();
+
+    artistTab.click();
+    await tick();
+    folderTab.click();
+    await tick();
+    expect(folderPath.value).toBe("");
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    expect(player.current).toBe(current);
+    expect(player.currentId).toBe(currentId);
+    expect(player.currentTime).toBe(25);
+    expect(player.playing).toBe(true);
+    expect(audio.src).toBe(source);
+    expect(readFile).not.toHaveBeenCalled();
+    await filterLibrary("Vol2/同じ/song.mp3");
+    folderButtons()[0]!.click();
+    await tick();
+    folderButtons()[0]!.click();
+    await tick();
+    findButton("song").click();
+    await vi.waitFor(() => expect(player.current?.path).toBe("Vol2/同じ/song.mp3"));
+    expect(readFile).toHaveBeenCalledOnce();
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+  });
+
+  it("keeps the folder on tag changes and refresh, then falls back to the closest remaining folder", async () => {
+    const music = [
+      track("A/B/C/one.mp3", "First", "Album"),
+      track("A/second.mp3", "Second", "Album"),
+    ];
+    player.setTracks(music);
+    root.querySelector<HTMLButtonElement>("#library-tab-folders")!.click();
+    await tick();
+    for (const path of ["A", "A/B", "A/B/C"]) {
+      root.querySelector<HTMLButtonElement>(`[data-folder-path="${path}"]`)!.click();
+      await tick();
+    }
+    player.updateTrackMetadata(player.tracks[0]!, { title: "Renamed" });
+    await tick();
+    expect(folderPath.value).toBe("A/B/C");
+    expect(findButton("Renamed")).toBeDefined();
+    player.updateTracks([...music, track("new.mp3", "New", "Album")]);
+    await tick();
+    expect(folderPath.value).toBe("A/B/C");
+    player.updateTracks(music.slice(1));
+    await tick();
+    expect(folderPath.value).toBe("A");
+    expect(root.querySelector('[aria-current="location"]')?.textContent).toBe("A");
+    expect(findButton("Second")).toBeDefined();
+    player.updateTracks([]);
+    await tick();
+    expect(folderPath.value).toBe("");
+  });
+
   it.each(["metadata", "folder"] as const)(
     "updates each filtered view and open details without changing playback in %s mode",
     async (mode) => {

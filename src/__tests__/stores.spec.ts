@@ -188,6 +188,7 @@ describe("ライブラリ更新の競合", () => {
     slow.resolve([playable("old.mp3")]);
     await old;
     expect(library.directory).toBe(b);
+    const rootRevision = library.rootRevision;
     expect(player.tracks[0]?.name).toBe("same.mp3");
     expect(saveDirectory).toHaveBeenCalledTimes(1);
 
@@ -214,6 +215,7 @@ describe("ライブラリ更新の競合", () => {
     await library.selectFolder();
     expect(player.index).toBe(-1);
     expect(library.directory).toBe(a);
+    expect(library.rootRevision).toBe(rootRevision + 1);
   });
 
   it("同一フォルダーの連続更新で古い成功や失敗を無視する", async () => {
@@ -295,9 +297,11 @@ describe("ライブラリ更新の競合", () => {
     const library = useLibraryStore();
     const player = usePlayerStore();
     await library.selectFolder();
+    const rootRevision = library.rootRevision;
     await player.playAt(0);
     await library.selectFolder();
     expect(vi.spyOn(first, "isSameEntry")).toHaveBeenCalledWith(second);
+    expect(library.rootRevision).toBe(rootRevision);
     expect(player).toMatchObject({ index: 0, playing: true });
     expect(player.current?.path).toBe("song.mp3");
     player.$dispose();
