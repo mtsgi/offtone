@@ -20,7 +20,7 @@ afterEach(() => {
 async function writeLegacySettings() {
   await loadSettings();
   await new Promise<void>((resolve, reject) => {
-    const request = indexedDB.open("offtone", 2);
+    const request = indexedDB.open("offtone");
     request.onerror = () => reject(request.error);
     request.onsuccess = () => {
       const db = request.result;
@@ -92,7 +92,7 @@ describe("settings", () => {
     expect(restored.preferences).toEqual(expected);
     expect(restored.saveFailed).toBe(false);
     await new Promise<void>((resolve, reject) => {
-      const request = indexedDB.open("offtone", 2);
+      const request = indexedDB.open("offtone");
       request.onerror = () => reject(request.error);
       request.onsuccess = () => {
         const db = request.result;
