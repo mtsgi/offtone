@@ -10,6 +10,8 @@ interface RegistrationOptions {
 
 type Register = (options: RegistrationOptions) => (reload?: boolean) => Promise<void>;
 
+const PLAYBACK_SAVE_TIMEOUT_MS = 2000;
+
 /** The update remains visible until it is applied, including after the prompt is deferred. */
 export function createPwaUpdate(
   register: Register,
@@ -34,10 +36,18 @@ export function createPwaUpdate(
   async function reload() {
     if (reloading) return;
     reloading = true;
+    let saveTimeout: ReturnType<typeof setTimeout> | undefined;
     try {
-      if (beforeReload) await beforeReload();
+      if (beforeReload) {
+        const deadline = new Promise<void>((resolve) => {
+          saveTimeout = setTimeout(resolve, PLAYBACK_SAVE_TIMEOUT_MS);
+        });
+        await Promise.race([beforeReload(), deadline]);
+      }
     } catch {
       // A failed playback save must not prevent the app update.
+    } finally {
+      clearTimeout(saveTimeout);
     }
     if (!disposed) browser.location.reload();
   }

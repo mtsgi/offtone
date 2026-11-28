@@ -111,10 +111,43 @@ describe("PWA updates", () => {
     expect(save).toHaveBeenCalledOnce();
     expect(reload).not.toHaveBeenCalled();
     rejectSave(new Error("storage unavailable"));
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(reload).toHaveBeenCalledOnce();
     updater.dispose();
   });
+
+  it.each([false, true])(
+    "reloads after the save deadline when the worker was already activated: %s",
+    async (alreadyActivated) => {
+      let rejectSave!: (error: Error) => void;
+      const saving = new Promise<void>((_resolve, reject) => {
+        rejectSave = reject;
+      });
+      const save = vi.fn(() => saving);
+      const { updater, callbacks, registration, changeController, reload } = setup(save);
+      callbacks.onNeedRefresh();
+      if (alreadyActivated) {
+        Object.defineProperty(registration, "waiting", { value: null });
+        changeController();
+        expect(save).not.toHaveBeenCalled();
+      }
+      updater.requestUpdate(false);
+      if (!alreadyActivated) changeController();
+
+      expect(save).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(reload).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reload).toHaveBeenCalledOnce();
+      expect(updater.state.error).toBe("");
+
+      rejectSave(new Error("storage failed after the deadline"));
+      await vi.advanceTimersByTimeAsync(15000);
+      expect(reload).toHaveBeenCalledOnce();
+      expect(updater.state.error).toBe("");
+      updater.dispose();
+    },
+  );
 
   it("reports a failed or stalled activation and permits retry", async () => {
     const { updater, callbacks, update } = setup();

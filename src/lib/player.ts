@@ -152,13 +152,17 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   }
   function restorePlayback(saved: SavedPlayback): void {
     const byId = new Map(state.tracks.map((track) => [trackId(saved.rootId, track.path), track]));
-    const known = new Set([...saved.library, ...saved.queue]);
+    const known = new Set(saved.edited ? [...saved.library, ...saved.queue] : saved.queue);
     const entries = saved.queue.map((id) => {
       const track = byId.get(id);
       return track ? makeEntry(track) : undefined;
     });
     const additions = [...byId].flatMap(([id, track]) => (known.has(id) ? [] : [makeEntry(track)]));
     const queue = [...entries.filter((entry) => entry !== undefined), ...additions];
+    if (!saved.edited) {
+      const libraryIndexes = new Map(state.tracks.map((track, index) => [track, index]));
+      queue.sort((a, b) => libraryIndexes.get(a.track)! - libraryIndexes.get(b.track)!);
+    }
     const order = saved.shuffle
       ? [
           ...saved.order.flatMap((index) => {

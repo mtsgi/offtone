@@ -58,6 +58,46 @@ beforeEach(() => {
 });
 
 describe("playback restoration", () => {
+  it.each([false, true])(
+    "uses library order for an unedited queue with shuffle %s",
+    async (shuffle) => {
+      const player = createPlayer(audioElement());
+      const b = track("b.mp3");
+      const d = track("d.mp3");
+      const removed = track("e.mp3");
+      const previousTracks = [b, d, removed];
+      player.setTracks(previousTracks);
+      await player.playAt(1);
+      player.setShuffle(shuffle);
+      const saved = player.capturePlayback("root");
+
+      const tracks = [track("a.mp3"), b, track("c.mp3"), d];
+      player.setTracks(tracks);
+      player.restorePlayback(readSavedPlayback(saved, "root")!);
+
+      const restored = player.getState();
+      expect(restored.queue.map((entry) => entry.track)).toEqual(tracks);
+      expect(restored).toMatchObject({
+        index: 3,
+        currentId: restored.queue[3]!.id,
+        playing: false,
+      });
+      if (shuffle) {
+        const retained = saved.order
+          .map((index) => previousTracks[index])
+          .filter((track) => track !== removed);
+        const playbackOrder = restored.order.map(
+          (id) => restored.queue.find((entry) => entry.id === id)?.track,
+        );
+        expect(playbackOrder.slice(0, 2)).toEqual(retained);
+        expect(new Set(playbackOrder.slice(2))).toEqual(new Set([tracks[0], tracks[2]]));
+      }
+      player.setShuffle(false);
+      expect(player.getState().order).toEqual(restored.queue.map((entry) => entry.id));
+      player.dispose();
+    },
+  );
+
   it("restores duplicate occurrences, queue order, shuffle order and paused position", async () => {
     const previousAudio = audioElement();
     const previous = createPlayer(previousAudio);
@@ -84,7 +124,7 @@ describe("playback restoration", () => {
     const play = vi.spyOn(audio, "play");
     const read = vi.spyOn(a.handle, "getFile").mockClear();
     const player = createPlayer(audio);
-    player.setTracks([a, b, track("removed-from-queue.mp3"), track("new.mp3")]);
+    player.setTracks([track("0-new.mp3"), a, b, track("removed-from-queue.mp3")]);
     const initialIds = player.getState().queue.map((entry) => entry.id);
     player.restorePlayback(readSavedPlayback(saved, "root")!);
     const restored = player.getState();
@@ -92,7 +132,7 @@ describe("playback restoration", () => {
       "a.mp3",
       "a.mp3",
       "b.mp3",
-      "new.mp3",
+      "0-new.mp3",
     ]);
     expect(restored.queue.every(({ id }) => !initialIds.includes(id))).toBe(true);
     expect(restored.currentId).toBe(restored.queue[1]!.id);
