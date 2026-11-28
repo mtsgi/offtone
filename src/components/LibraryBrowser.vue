@@ -7,14 +7,17 @@ import { sortAlbums, sortArtists, sortTracks } from "../lib/library-sort";
 import { buildCatalog, matchesTrack } from "../lib/music-catalog";
 import { useSettingsStore } from "../stores/settings";
 import ArtworkImage from "./ArtworkImage.vue";
+import FolderBrowser from "./FolderBrowser.vue";
 import TrackList from "./TrackList.vue";
 
-const props = defineProps<{ tracks: Track[]; directory?: MusicDirectory }>();
-type View = "tracks" | "albums" | "artists";
+const props = defineProps<{ tracks: Track[]; directory?: MusicDirectory; folderPath?: string }>();
+const emit = defineEmits<{ navigateFolder: [path: string] }>();
+type View = "tracks" | "albums" | "artists" | "folders";
 const tabs: { id: View; label: string }[] = [
   { id: "tracks", label: "曲" },
   { id: "albums", label: "アルバム" },
   { id: "artists", label: "アーティスト" },
+  { id: "folders", label: "フォルダー" },
 ];
 const view = ref<View>("tracks");
 const query = ref("");
@@ -65,9 +68,14 @@ const detailTracks = computed(() =>
   ),
 );
 function setView(id: View) {
+  if (view.value === "folders" && id !== "folders") emit("navigateFolder", "");
   view.value = id;
   selected.value = undefined;
   openerKey = undefined;
+}
+function clearSearch() {
+  query.value = "";
+  document.getElementById("library-search")?.focus();
 }
 function keyTab(event: KeyboardEvent, id: View) {
   const current = tabs.findIndex((tab) => tab.id === id);
@@ -117,7 +125,11 @@ watch([catalog, selected, view], () => {
 
 <template>
   <section aria-label="ライブラリの閲覧" class="space-y-4">
-    <div role="tablist" aria-label="ライブラリ表示" class="flex border-b border-default">
+    <div
+      role="tablist"
+      aria-label="ライブラリ表示"
+      class="grid grid-cols-4 border-b border-default"
+    >
       <button
         v-for="tab in tabs"
         :id="`library-tab-${tab.id}`"
@@ -127,7 +139,7 @@ watch([catalog, selected, view], () => {
         :aria-selected="view === tab.id"
         aria-controls="library-panel"
         :tabindex="view === tab.id ? 0 : -1"
-        class="min-h-11 flex-1 border-b-2 px-3 font-medium focus-visible:outline-2"
+        class="min-h-11 border-b-2 px-1 text-xs font-medium focus-visible:outline-2 sm:text-base"
         :class="view === tab.id ? 'border-primary text-primary' : 'border-transparent text-muted'"
         @click="setView(tab.id)"
         @keydown="keyTab($event, tab.id)"
@@ -151,7 +163,7 @@ watch([catalog, selected, view], () => {
         aria-label="検索をクリア"
         icon="i-lucide-x"
         class="min-h-11 min-w-11"
-        @click="query = ''"
+        @click="clearSearch"
       />
     </div>
     <div id="library-panel" role="tabpanel" :aria-labelledby="`library-tab-${view}`">
@@ -245,6 +257,14 @@ watch([catalog, selected, view], () => {
           </li>
         </ul></template
       >
+      <FolderBrowser
+        v-else-if="view === 'folders'"
+        :tracks="tracks"
+        :matches="query.trim() ? filtered : undefined"
+        :path="folderPath ?? ''"
+        :root-name="directory?.name"
+        @navigate-folder="emit('navigateFolder', $event)"
+      />
       <template v-else
         ><p v-if="!artistResults.length" class="py-6 text-sm text-muted">
           検索に一致するアーティストがありません。
