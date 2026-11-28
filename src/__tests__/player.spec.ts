@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPlayer } from "../lib/player";
 import type { Track } from "../lib/library";
 import { readSavedPlayback } from "../lib/playback-session";
+import { trackId } from "../lib/catalog";
 
 function track(name: string, fail = false): Track {
   return {
@@ -599,6 +600,120 @@ describe("queue refresh", () => {
 });
 
 describe("explicit queue and controls", () => {
+  it.each([false, true])(
+    "inserts after the current occurrence with shuffle %s",
+    async (shuffle) => {
+      const audio = audioElement();
+      const player = createPlayer(audio);
+      const a = track("a.mp3");
+      const b = track("b.mp3");
+      const c = track("c.mp3");
+      player.setTracks([a, b, c]);
+      player.addTrack(b);
+      player.moveQueue(3, 2);
+      const duplicate = player.getState().queue[2]!;
+      await player.playId(duplicate.id);
+      player.setShuffle(shuffle);
+      player.setRepeat("all");
+      Object.defineProperty(audio, "duration", { value: 120 });
+      audio.dispatchEvent(new Event("loadedmetadata"));
+      player.seek(20);
+      const source = audio.src;
+      const before = player.getState();
+      const pause = vi.spyOn(audio, "pause").mockClear();
+      const load = vi.spyOn(audio, "load").mockClear();
+      const read = vi.spyOn(a.handle, "getFile");
+
+      expect(player.playNext(b)).toBe(true);
+      const first = player.getState().queue[3]!;
+      expect(player.playNext(a)).toBe(true);
+      const after = player.getState();
+      const second = after.queue[3]!;
+      const pos = before.order.indexOf(duplicate.id) + 1;
+      expect(after.order).toEqual([
+        ...before.order.slice(0, pos),
+        second.id,
+        first.id,
+        ...before.order.slice(pos),
+      ]);
+      expect(after.queue.filter((entry) => entry !== first && entry !== second)).toEqual(
+        before.queue,
+      );
+      expect(first.track).toBe(b);
+      expect(second.track).toBe(a);
+      expect(new Set(after.order).size).toBe(after.queue.length);
+      expect(after).toMatchObject({
+        currentId: duplicate.id,
+        currentTime: 20,
+        playing: true,
+        repeat: "all",
+      });
+      expect(audio.src).toBe(source);
+      expect(pause).not.toHaveBeenCalled();
+      expect(load).not.toHaveBeenCalled();
+      expect(read).not.toHaveBeenCalled();
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      expect(revokeObjectURL).not.toHaveBeenCalled();
+
+      ended(audio);
+      await vi.waitFor(() => expect(player.getState().currentId).toBe(second.id));
+      player.setShuffle(false);
+      expect(player.getState().order).toEqual(after.queue.map(({ id }) => id));
+      expect(player.getState().order[4]).toBe(first.id);
+      player.dispose();
+    },
+  );
+
+  it("prepends without a current item and preserves repeat-one behavior", async () => {
+    const audio = audioElement();
+    const play = vi.spyOn(audio, "play");
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    const b = track("b.mp3");
+    player.setTracks([a, b]);
+    player.setShuffle(true);
+    player.setRepeat("one");
+    const initial = player.getState();
+    player.playNext(b);
+    expect(player.getState().queue.slice(1)).toEqual(initial.queue);
+    expect(player.getState().order.slice(1)).toEqual(initial.order);
+    for (const { id } of player.getState().queue) player.removeFromQueue(id);
+    expect(player.playNext(b)).toBe(true);
+    const [only] = player.getState().queue;
+    expect(player.getState()).toMatchObject({ currentId: null, order: [only!.id], playing: false });
+    expect(play).not.toHaveBeenCalled();
+    await player.toggle();
+    player.playNext(a);
+    ended(audio);
+    await vi.waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(player.getState().currentId).toBe(only!.id);
+    player.next();
+    await vi.waitFor(() => expect(player.getState().currentId).toBe(player.getState().order[1]));
+    player.dispose();
+  });
+
+  it("resolves same-root rescans and rejects deleted tracks and tracks from another root", () => {
+    const player = createPlayer(audioElement());
+    const original = track("same.mp3");
+    player.setTracks([original]);
+    const rescanned = { ...track(original.path), id: trackId("root", original.path) };
+    player.updateTracks([rescanned]);
+    expect(player.playNext(original)).toBe(true);
+    expect(player.getState().queue[0]?.track).toBe(rescanned);
+    expect(player.resolveTrack({ ...rescanned })).toBe(rescanned);
+
+    player.updateTracks([]);
+    const missing = player.getState();
+    expect(player.playNext(rescanned)).toBe(false);
+    expect(player.getState()).toBe(missing);
+    player.setTracks([{ ...track(original.path), id: trackId("other", original.path) }]);
+    const other = player.getState();
+    expect(player.playNext(original)).toBe(false);
+    expect(player.playNext(rescanned)).toBe(false);
+    expect(player.getState()).toBe(other);
+    player.dispose();
+  });
+
   it("keeps duplicate entries distinct and preserves playback on edits", async () => {
     const audio = audioElement();
     const player = createPlayer(audio);

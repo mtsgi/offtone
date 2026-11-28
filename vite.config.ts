@@ -45,6 +45,7 @@ export default defineConfig({
             "lucide:arrow-down",
             "lucide:arrow-left",
             "lucide:disc-3",
+            "lucide:ellipsis",
             "lucide:user",
             "lucide:x",
           ],
