@@ -1,7 +1,7 @@
 import { computed, onScopeDispose, ref, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { scanDirectory, type MusicDirectory } from "../lib/library";
-import { metadataIsValid, trackId, type TrackRecord } from "../lib/catalog";
+import { metadataIsValid, trackId, type RootId, type TrackRecord } from "../lib/catalog";
 import { MetadataWorker } from "../lib/metadata-worker";
 import { deleteTrack, getTrack, listTrackIds, putTrack } from "../lib/storage";
 import {
@@ -29,7 +29,8 @@ export const useLibraryStore = defineStore("library", () => {
   const supported = "showDirectoryPicker" in window;
   // キューに反映済みのルート。名前だけでは別フォルダーを区別できない。
   let queueDirectory: MusicDirectory | undefined;
-  let queueRootId: string | undefined;
+  const queueRootId = ref<RootId>();
+  const rootId = computed(() => queueRootId.value);
   let generation = 0;
   let saves: Promise<void> = Promise.resolve();
   const analysis = ref({ active: false, done: 0, total: 0 });
@@ -64,7 +65,7 @@ export const useLibraryStore = defineStore("library", () => {
     abort = new AbortController();
     const signal = abort.signal;
     const tracks = [...player.tracks];
-    const rootId = queueRootId;
+    const rootId = queueRootId.value;
     analysisStatus.value = "";
     analysisCancelled.value = false;
     analysis.value = { active: true, done: 0, total: tracks.length };
@@ -174,8 +175,10 @@ export const useLibraryStore = defineStore("library", () => {
           }
         }
       } else clearArtwork();
-      if (same && queueRootId) {
-        for (const track of found) track.id = trackId(queueRootId, track.path);
+      if (!same) queueRootId.value = undefined;
+      const rootId = queueRootId.value;
+      if (rootId) {
+        for (const track of found) track.id = trackId(rootId, track.path);
       }
       if (same) player.updateTracks(found);
       else player.setTracks(found);
@@ -186,7 +189,6 @@ export const useLibraryStore = defineStore("library", () => {
           artworkUrls.delete(path);
         }
       }
-      if (!same) queueRootId = undefined;
       queueDirectory = selected;
       directory.value = selected;
       if (!same) rootRevision.value++;
@@ -215,8 +217,8 @@ export const useLibraryStore = defineStore("library", () => {
         if (run !== generation) return;
         const id = await saveDirectory(selected);
         if (run === generation && queueDirectory === selected) {
-          queueRootId = id;
           for (const track of player.tracks) track.id = trackId(id, track.path);
+          queueRootId.value = id;
         }
       });
     try {
@@ -234,9 +236,9 @@ export const useLibraryStore = defineStore("library", () => {
   }
 
   async function finishScan(selected: MusicDirectory, run: number, remember = true): Promise<void> {
-    if (remember || !queueRootId) await saveSelection(selected, run);
+    if (remember || !queueRootId.value) await saveSelection(selected, run);
     if (run !== generation) return;
-    if (queueRootId) await player.restorePlayback(queueRootId);
+    if (queueRootId.value) await player.restorePlayback(queueRootId.value);
     if (run === generation) void analyze();
   }
 
@@ -346,6 +348,7 @@ export const useLibraryStore = defineStore("library", () => {
   return {
     directory,
     rootRevision,
+    rootId,
     folderName,
     status,
     busy,

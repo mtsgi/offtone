@@ -54,3 +54,21 @@ export function metadataIsValid(
     !!record.metadata && record.metadataVersion === parserVersion && !fileChanged(record, current)
   );
 }
+
+/** Reject transient IDs and references to a different root at persistence boundaries. */
+export function assertTrackInRoot(rootId: RootId, id: TrackId): void {
+  try {
+    const parts: unknown = JSON.parse(id);
+    if (
+      rootId &&
+      Array.isArray(parts) &&
+      typeof parts[1] === "string" &&
+      trackId(rootId, parts[1]) === id
+    ) {
+      return;
+    }
+  } catch {
+    // Includes malformed JSON and invalid paths.
+  }
+  throw new TypeError("Expected a persistent track ID for the specified root");
+}

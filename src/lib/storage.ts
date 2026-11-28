@@ -2,12 +2,10 @@ import type { AppSettings } from "./settings";
 import type { MusicDirectory } from "./library";
 import type { RootId, TrackId, TrackRecord } from "./catalog";
 import type { SavedPlayback } from "./playback-session";
+import { ROOTS, SETTINGS, TRACKS, readRequest, runTransaction } from "./indexed-db";
 
-const DATABASE = "offtone";
-const VERSION = 2;
-const SETTINGS = "settings";
-const ROOTS = "roots";
-const TRACKS = "tracks";
+export { StorageError } from "./indexed-db";
+
 const DIRECTORY_KEY = "music-directory";
 const APP_SETTINGS_KEY = "app-settings";
 
@@ -16,117 +14,13 @@ export interface RootRecord {
   handle: MusicDirectory;
 }
 
-/** DB を消去せず、原因を UI に伝えられるようにする。 */
-export class StorageError extends Error {
-  constructor(
-    public readonly kind: "blocked" | "quota" | "unavailable",
-    public readonly cause?: unknown,
-  ) {
-    super(`IndexedDB: ${kind}`);
-    this.name = "StorageError";
-  }
-}
-
-function storageError(cause: unknown): StorageError {
-  return cause instanceof StorageError
-    ? cause
-    : new StorageError(
-        cause instanceof DOMException && cause.name === "QuotaExceededError"
-          ? "quota"
-          : "unavailable",
-        cause,
-      );
-}
-
-function openDatabase(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let open: IDBOpenDBRequest;
-    try {
-      open = indexedDB.open(DATABASE, VERSION);
-    } catch (cause) {
-      reject(storageError(cause));
-      return;
-    }
-    open.onupgradeneeded = () => {
-      const db = open.result;
-      // upgrade は原子的。失敗すれば v1 とその設定は保持される。
-      if (!db.objectStoreNames.contains(SETTINGS)) db.createObjectStore(SETTINGS);
-      if (!db.objectStoreNames.contains(ROOTS)) db.createObjectStore(ROOTS, { keyPath: "id" });
-      if (!db.objectStoreNames.contains(TRACKS)) {
-        const tracks = db.createObjectStore(TRACKS, { keyPath: "id" });
-        tracks.createIndex("rootId", "rootId");
-      }
-    };
-    open.onblocked = () => {
-      settled = true;
-      reject(new StorageError("blocked"));
-    };
-    open.onerror = () => {
-      settled = true;
-      reject(storageError(open.error));
-    };
-    open.onsuccess = () => {
-      const db = open.result;
-      db.onversionchange = () => db.close();
-      if (settled) db.close();
-      else {
-        settled = true;
-        resolve(db);
-      }
-    };
-  });
-}
-
-async function transaction<T>(
+function transaction<T>(
   stores: string[],
   mode: IDBTransactionMode,
   action: (tx: IDBTransaction) => IDBRequest<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    let tx: IDBTransaction | undefined;
-    let request: IDBRequest<T>;
-    let requestError: DOMException | null = null;
-    const onAbort = () => {
-      try {
-        tx?.abort();
-      } catch {
-        /* already complete */
-      }
-    };
-    try {
-      if (signal?.aborted) throw new DOMException("Cancelled", "AbortError");
-      tx = db.transaction(stores, mode);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      request = action(tx);
-      const activeTransaction = tx;
-      tx.addEventListener("error", (event) => {
-        requestError = (event.target as IDBRequest).error ?? activeTransaction.error;
-      });
-    } catch (cause) {
-      try {
-        tx?.abort();
-      } catch {
-        // トランザクションが既に終了していればそのまま報告する。
-      }
-      signal?.removeEventListener("abort", onAbort);
-      db.close();
-      reject(storageError(cause));
-      return;
-    }
-    tx.oncomplete = () => {
-      signal?.removeEventListener("abort", onAbort);
-      db.close();
-      resolve(request.result);
-    };
-    tx.onabort = () => {
-      signal?.removeEventListener("abort", onAbort);
-      db.close();
-      reject(storageError(requestError ?? tx.error));
-    };
-  });
+  return runTransaction(stores, mode, (tx) => readRequest(action(tx)), signal);
 }
 
 async function saveDirectoryUnlocked(directory: MusicDirectory): Promise<RootId> {

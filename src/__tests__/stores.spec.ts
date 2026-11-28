@@ -69,6 +69,7 @@ describe("ライブラリと再生ストア", () => {
 
     await library.restore();
     expect(library.needsPermission).toBe(true);
+    expect(library.rootId).toBeUndefined();
     expect(player.tracks).toEqual([]);
 
     await library.restorePermission();
@@ -118,6 +119,8 @@ describe("ライブラリと再生ストア", () => {
     await library.selectFolder();
     expect(saveDirectory).toHaveBeenCalledWith(selected);
     expect(library.folderName).toBe("Music");
+    expect(library.rootId).toBe("music-directory");
+    expect(player.tracks[0]?.id).toBe(trackId(library.rootId!, "new.flac"));
     expect(player.tracks).toEqual(tracks);
   });
 });
@@ -563,16 +566,18 @@ describe("ライブラリ更新の競合", () => {
     const saving = deferred<string>();
     vi.mocked(saveDirectory)
       .mockReturnValueOnce(saving.promise)
-      .mockResolvedValueOnce("music-directory");
+      .mockResolvedValueOnce("second-root");
     const library = useLibraryStore();
     const first = library.selectFolder();
     await vi.waitFor(() => expect(saveDirectory).toHaveBeenCalledWith(a));
     const second = library.selectFolder();
     await vi.waitFor(() => expect(library.directory).toBe(b));
     expect(saveDirectory).toHaveBeenCalledTimes(1);
-    saving.resolve("music-directory");
+    expect(library.rootId).toBeUndefined();
+    saving.resolve("first-root");
     await Promise.all([first, second]);
     expect(vi.mocked(saveDirectory).mock.calls.map(([saved]) => saved)).toEqual([a, b]);
+    expect(library.rootId).toBe("second-root");
   });
   it("新しく選択したフォルダーの権限失効後、元のキューを保持して再許可・保存する", async () => {
     const original = folder("granted", "Original");

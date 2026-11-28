@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { IDBDatabase, IDBFactory, IDBObjectStore } from "fake-indexeddb";
+import { Blob } from "node:buffer";
 import {
   getTrack,
   loadDirectory,
@@ -16,10 +17,28 @@ import { trackId } from "../lib/catalog";
 import type { SavedPlayback } from "../lib/playback-session";
 import { parseSettings } from "../lib/settings";
 
+const STORES_V3 = [
+  "favorites",
+  "playHistory",
+  "playStats",
+  "playlistEntries",
+  "playlists",
+  "roots",
+  "settings",
+  "tracks",
+];
+
 function open(version: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("offtone", version);
-    request.onupgradeneeded = () => request.result.createObjectStore("settings");
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore("settings");
+      if (version === 2) {
+        request.result.createObjectStore("roots", { keyPath: "id" });
+        const tracks = request.result.createObjectStore("tracks", { keyPath: "id" });
+        tracks.createIndex("rootId", "rootId");
+      }
+    };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
@@ -45,8 +64,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("IndexedDB v2", () => {
-  it("既存のフォルダー・設定・タグと同じ v2 DB にルート別の再生状態を保存する", async () => {
+describe("IndexedDB v3", () => {
+  it("新規 DB にフォルダー・設定・タグ・ルート別の再生状態を保存する", async () => {
     const dir = folder("a");
     const rootId = await saveDirectory(dir);
     const id = trackId(rootId, "song.mp3");
@@ -83,8 +102,8 @@ describe("IndexedDB v2", () => {
     expect(await loadDirectory()).toEqual(dir);
     expect(await loadSettings()).toEqual(settings);
     expect(await getTrack(id)).toEqual(record);
-    const db = await open(2);
-    expect([...db.objectStoreNames]).toEqual(["roots", "settings", "tracks"]);
+    const db = await open(3);
+    expect([...db.objectStoreNames]).toEqual(STORES_V3);
     db.close();
   });
 
@@ -119,13 +138,68 @@ describe("IndexedDB v2", () => {
     expect(await loadDirectory()).toEqual(folder("legacy"));
     const id = await saveDirectory(folder("legacy"));
     expect(await saveDirectory(folder("legacy"))).toBe(id);
-    const upgraded = await open(2);
-    expect([...upgraded.objectStoreNames]).toEqual(["roots", "settings", "tracks"]);
+    const upgraded = await open(3);
+    expect([...upgraded.objectStoreNames]).toEqual(STORES_V3);
     const request = upgraded.transaction("settings").objectStore("settings").get("another-setting");
     await new Promise<void>((resolve) => {
       request.onsuccess = () => resolve();
     });
     expect(request.result).toBe("keep");
+    upgraded.close();
+  });
+
+  it("v2 の設定、再生状態、ルート、タグとアートワークを保持してアップグレードする", async () => {
+    const dir = folder("legacy");
+    const rootId = "existing-root";
+    const id = trackId(rootId, "song.mp3");
+    const settings = parseSettings({ theme: "dark" });
+    const playback: SavedPlayback = {
+      version: 1,
+      rootId,
+      library: [id],
+      queue: [id, id],
+      edited: true,
+      order: [1, 0],
+      current: 1,
+      position: 19,
+      shuffle: true,
+      repeat: "all",
+      volume: 0.5,
+    };
+    const { artwork, ...track } = {
+      id,
+      rootId,
+      path: "song.mp3",
+      size: 123,
+      lastModified: 456,
+      metadata: { title: "Tagged", artworkRef: id },
+      metadataVersion: 5,
+      artwork: new Blob(["thumbnail"], { type: "image/png" }),
+    };
+    const db = await open(2);
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(["settings", "roots", "tracks"], "readwrite");
+      const preferences = tx.objectStore("settings");
+      preferences.put(dir, "music-directory");
+      preferences.put(settings, "app-settings");
+      preferences.put(playback, ["playback", rootId]);
+      tx.objectStore("roots").put({ id: rootId, handle: dir });
+      tx.objectStore("tracks").put({ ...track, artwork });
+      tx.oncomplete = () => resolve();
+      tx.onabort = () => reject(tx.error);
+    });
+    db.close();
+
+    expect(await loadDirectory()).toEqual(dir);
+    expect(await loadSettings()).toEqual(settings);
+    expect(await loadPlayback(rootId)).toEqual(playback);
+    expect(await saveDirectory(dir)).toBe(rootId);
+    const preserved = await getTrack(id);
+    expect(preserved).toMatchObject(track);
+    expect(preserved?.artwork?.type).toBe("image/png");
+    expect(await preserved?.artwork?.text()).toBe("thumbnail");
+    const upgraded = await open(3);
+    expect([...upgraded.objectStoreNames]).toEqual(STORES_V3);
     upgraded.close();
   });
 
@@ -160,7 +234,7 @@ describe("IndexedDB v2", () => {
       options,
     ) {
       const store = create.call(this, name, options);
-      if (name === "tracks") queueMicrotask(() => store.transaction.abort());
+      if (name === "playStats") queueMicrotask(() => store.transaction.abort());
       return store;
     });
     await expect(loadDirectory()).rejects.toBeInstanceOf(StorageError);
@@ -181,7 +255,7 @@ describe("IndexedDB v2", () => {
 
   it("別タブに阻まれた upgrade を報告し、閉じた後に復旧する", async () => {
     const old = await open(1);
-    await expect(loadDirectory()).rejects.toBeInstanceOf(StorageError);
+    await expect(loadDirectory()).rejects.toMatchObject({ kind: "blocked" });
     old.close();
     await expect(loadDirectory()).resolves.toBeUndefined();
   });
