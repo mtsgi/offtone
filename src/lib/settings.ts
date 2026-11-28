@@ -1,12 +1,22 @@
 import type { AlbumGrouping } from "./music-catalog";
 
+const TRACK_SORT_KEYS = ["library", "title", "artist", "album"] as const;
+
 export const SORT_KEYS = {
-  tracks: ["library", "title", "artist", "album"],
+  tracks: TRACK_SORT_KEYS,
+  albumTracks: ["recording", ...TRACK_SORT_KEYS],
   albums: ["library", "album", "artist"],
   artists: ["library", "artist"],
 } as const;
 export type SortView = keyof typeof SORT_KEYS;
 export type SortKey<V extends SortView> = (typeof SORT_KEYS)[V][number];
+export const SORT_LABELS: Record<SortKey<SortView>, string> = {
+  recording: "収録順",
+  library: "ライブラリ順",
+  title: "曲名",
+  artist: "アーティスト名",
+  album: "アルバム名",
+};
 export type SortDirection = "asc" | "desc";
 export interface SortOrder<V extends SortView> {
   key: SortKey<V>;
@@ -24,6 +34,7 @@ export const DEFAULT_SETTINGS = {
   albumGrouping: "metadata",
   librarySort: {
     tracks: { key: "library", direction: "asc" },
+    albumTracks: { key: "recording", direction: "asc" },
     albums: { key: "library", direction: "asc" },
     artists: { key: "library", direction: "asc" },
   },
@@ -66,11 +77,12 @@ function parseSort<V extends SortView>(view: V, value: unknown): SortOrder<V> {
 
 export function parseSettings(value: unknown): AppSettings {
   const { albumGrouping, librarySort, theme } = fields(value);
-  const { tracks, albums, artists } = fields(librarySort);
+  const { tracks, albumTracks, albums, artists } = fields(librarySort);
   return {
     albumGrouping: isAlbumGrouping(albumGrouping) ? albumGrouping : DEFAULT_SETTINGS.albumGrouping,
     librarySort: {
       tracks: parseSort("tracks", tracks),
+      albumTracks: parseSort("albumTracks", albumTracks),
       albums: parseSort("albums", albums),
       artists: parseSort("artists", artists),
     },

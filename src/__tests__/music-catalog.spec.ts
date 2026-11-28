@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import { shallowReactive, computed } from "vue";
 import type { Track } from "../lib/library";
-import { albumKey, buildCatalog, matchesTrack, trackTitle } from "../lib/music-catalog";
+import {
+  albumKey,
+  buildCatalog,
+  matchesTrack,
+  sortByRecordingOrder,
+  trackTitle,
+} from "../lib/music-catalog";
 
 function track(path: string, metadata?: Track["metadata"]): Track {
   return { path, name: path.split("/").pop()!, metadata, handle: {} as FileSystemFileHandle };
@@ -69,6 +75,35 @@ describe("music catalog", () => {
     t.metadata = { album: "New", artist: "Singer" };
     expect(catalog.value.albums[0]?.name).toBe("New");
     expect(catalog.value.artists[0]?.name).toBe("Singer");
+  });
+});
+
+describe("album recording order", () => {
+  it("sorts by disc and track, keeping input order for repeated and missing numbers", () => {
+    const discTwo = track("disc-two.mp3", { discNumber: 2, trackNumber: 1 });
+    const second = track("second.mp3", { discNumber: 1, trackNumber: 2 });
+    const first = track("first.mp3", { trackNumber: 1 });
+    const duplicate = track("duplicate.mp3", { discNumber: 1, trackNumber: 1 });
+    const missingOne = track("unknown.mp3");
+    const alsoMissingOne = track("also-unknown.mp3", { discNumber: 1 });
+    const missingTwo = track("unknown-two.mp3", { discNumber: 2 });
+    const album = [discTwo, missingOne, second, first, missingTwo, duplicate, alsoMissingOne];
+    expect(sortByRecordingOrder(album)).toEqual([
+      first,
+      duplicate,
+      second,
+      missingOne,
+      alsoMissingOne,
+      discTwo,
+      missingTwo,
+    ]);
+    expect(album[0]).toBe(discTwo);
+    expect(album[1]).toBe(missingOne);
+  });
+
+  it("preserves library order for albums with disc numbers alone", () => {
+    const tracks = [track("two.mp3", { discNumber: 2 }), track("one.mp3", { discNumber: 1 })];
+    expect(sortByRecordingOrder(tracks)).toEqual(tracks);
   });
 });
 

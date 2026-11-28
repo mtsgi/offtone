@@ -175,6 +175,7 @@ export const usePlayerStore = defineStore("player", () => {
     flushPlayback,
     updateTrackMetadata,
     playAt: player.playAt,
+    playAlbum: player.playAlbum,
     toggle: player.toggle,
     previous: player.previous,
     next: player.next,

@@ -15,6 +15,19 @@ export const trackTitle = (track: Track) =>
 export const trackArtist = (track: Track) => value(track.metadata?.artist) ?? UNKNOWN_ARTIST;
 export const trackAlbum = (track: Track) => value(track.metadata?.album) ?? UNKNOWN_ALBUM;
 
+export const albumDiscNumber = (track: Track) => track.metadata?.discNumber ?? 1;
+
+export function sortByRecordingOrder(tracks: readonly Track[]): Track[] {
+  if (!tracks.some((track) => track.metadata?.trackNumber !== undefined)) return [...tracks];
+  return [...tracks].sort((a, b) => {
+    const discOrder = albumDiscNumber(a) - albumDiscNumber(b);
+    if (discOrder) return discOrder;
+    const aNumber = a.metadata?.trackNumber ?? Infinity;
+    const bNumber = b.metadata?.trackNumber ?? Infinity;
+    return aNumber === bNumber ? 0 : aNumber - bNumber;
+  });
+}
+
 export interface Album {
   key: string;
   name: string;

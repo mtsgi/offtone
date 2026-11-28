@@ -4,7 +4,14 @@ import UIcon from "@nuxt/ui/components/Icon.vue";
 import { computed, nextTick, ref, watch } from "vue";
 import type { MusicDirectory, Track } from "../lib/library";
 import { sortAlbums, sortArtists, sortTracks } from "../lib/library-sort";
-import { buildCatalog, matchesTrack } from "../lib/music-catalog";
+import {
+  albumDiscNumber,
+  buildCatalog,
+  matchesTrack,
+  sortByRecordingOrder,
+} from "../lib/music-catalog";
+import { SORT_KEYS, SORT_LABELS } from "../lib/settings";
+import { usePlayerStore } from "../stores/player";
 import { useSettingsStore } from "../stores/settings";
 import ArtworkImage from "./ArtworkImage.vue";
 import FolderBrowser from "./FolderBrowser.vue";
@@ -24,6 +31,7 @@ const query = ref("");
 const selected = ref<string>();
 let openerKey: string | undefined;
 const settings = useSettingsStore();
+const player = usePlayerStore();
 const catalog = computed(() =>
   buildCatalog(props.tracks, { albumGrouping: settings.albumGrouping }),
 );
@@ -59,14 +67,41 @@ const artistResults = computed(() =>
 const relatedAlbums = computed(() =>
   sortAlbums(artistResult.value?.albums ?? [], settings.librarySort.albums),
 );
-const detailTracks = computed(() =>
-  sortTracks(
-    view.value === "albums"
-      ? (album.value?.tracks.filter((track) => matchesTrack(track, query.value)) ?? [])
-      : (artistResult.value?.tracks ?? []),
-    settings.librarySort.tracks,
-  ),
-);
+const albumSort = computed(() => settings.librarySort.albumTracks);
+const albumRecordingTracks = computed(() => sortByRecordingOrder(album.value?.tracks ?? []));
+const detailTracks = computed(() => {
+  if (view.value !== "albums")
+    return sortTracks(artistResult.value?.tracks ?? [], settings.librarySort.tracks);
+  const { key, direction } = albumSort.value;
+  const tracks =
+    key === "recording"
+      ? albumRecordingTracks.value
+      : sortTracks(album.value?.tracks ?? [], { key, direction });
+  // Decide whether to use recording order from the complete album before filtering.
+  return tracks.filter((track) => matchesTrack(track, query.value));
+});
+const detailDiscs = computed(() => {
+  if (view.value !== "albums" || albumSort.value.key !== "recording") return [];
+  const tracks = albumRecordingTracks.value;
+  if (
+    !tracks.some((track) => track.metadata?.trackNumber !== undefined) ||
+    new Set(tracks.map(albumDiscNumber)).size < 2
+  )
+    return [];
+
+  const discs = new Map<number, Track[]>();
+  for (const track of detailTracks.value) {
+    const number = albumDiscNumber(track);
+    const disc = discs.get(number);
+    if (disc) disc.push(track);
+    else discs.set(number, [track]);
+  }
+  return [...discs];
+});
+
+function playAlbum() {
+  void player.playAlbum(albumRecordingTracks.value);
+}
 function setView(id: View) {
   if (view.value === "folders" && id !== "folders") emit("navigateFolder", "");
   view.value = id;
@@ -216,10 +251,70 @@ watch([catalog, selected, view], () => {
             </li>
           </ul>
         </div>
+        <div v-if="view === 'albums' && album" class="space-y-3 pb-5">
+          <div class="space-y-1">
+            <UButton
+              icon="i-lucide-play"
+              class="min-h-11"
+              aria-describedby="play-album-description"
+              @click="playAlbum"
+              >アルバムを再生</UButton
+            >
+            <p id="play-album-description" class="text-sm text-muted">
+              現在のキューを置き換え、アルバム全 {{ album.tracks.length }} 曲を収録順で再生します。
+              <span v-if="player.shuffle">シャッフルを解除します。</span>
+              <span v-if="player.repeat === 'one'">1曲リピートを解除します。</span>
+            </p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <label class="text-sm">
+              アルバム内の並び順
+              <select
+                :value="albumSort.key"
+                class="block min-h-11 rounded-md border border-default bg-default px-3 text-base"
+                @change="
+                  settings.setSortKey('albumTracks', ($event.target as HTMLSelectElement).value)
+                "
+              >
+                <option v-for="key in SORT_KEYS.albumTracks" :key="key" :value="key">
+                  {{ SORT_LABELS[key] }}
+                </option>
+              </select>
+            </label>
+            <label v-if="albumSort.key !== 'recording'" class="text-sm">
+              昇順・降順
+              <select
+                :value="albumSort.direction"
+                class="block min-h-11 rounded-md border border-default bg-default px-3 text-base"
+                @change="
+                  settings.setSortDirection(
+                    'albumTracks',
+                    ($event.target as HTMLSelectElement).value,
+                  )
+                "
+              >
+                <option value="asc">昇順</option>
+                <option value="desc">降順</option>
+              </select>
+            </label>
+          </div>
+        </div>
         <h3 class="mb-2 font-semibold">曲</h3>
         <p v-if="!detailTracks.length" class="py-6 text-sm text-muted">
           検索に一致する曲がありません。
         </p>
+        <div v-else-if="detailDiscs.length" class="space-y-4">
+          <section
+            v-for="[disc, tracks] in detailDiscs"
+            :key="disc"
+            :aria-labelledby="`album-disc-${disc}`"
+          >
+            <h4 :id="`album-disc-${disc}`" class="text-sm font-medium text-muted">
+              Disc {{ disc }}
+            </h4>
+            <TrackList :tracks="tracks" />
+          </section>
+        </div>
         <TrackList v-else :tracks="detailTracks" />
       </template>
       <template v-else-if="view === 'tracks'"

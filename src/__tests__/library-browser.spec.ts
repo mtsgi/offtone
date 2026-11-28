@@ -338,6 +338,105 @@ describe("library browser", () => {
     expect(folderPath.value).toBe("");
   });
 
+  it.each([
+    { mode: "metadata", repeat: "one", albumRepeat: "off" },
+    { mode: "folder", repeat: "all", albumRepeat: "all" },
+  ] as const)(
+    "keeps recording order through search and replaces the queue only on album play in $mode mode",
+    async ({ mode, repeat, albumRepeat }) => {
+      const otherDisc = track("album/z.mp3", "Match Z", "Record");
+      otherDisc.metadata!.discNumber = 2;
+      const firstDisc = track("album/a.mp3", "Match A", "Record");
+      const second = track("album/b.mp3", "Second", "Record");
+      Object.assign(second.metadata!, { discNumber: 2, trackNumber: 1 });
+      const first = track("album/c.mp3", "First", "Record");
+      first.metadata!.trackNumber = 2;
+      const unrelated = track("other/c.mp3", "Other", "Record");
+      Object.assign(unrelated.metadata!, { artist: "Other Artist", discNumber: 1, trackNumber: 1 });
+      const music = [otherDisc, firstDisc, second, first, unrelated];
+      player.setTracks(music);
+      await player.restorePlayback("root");
+      await settings.setAlbumGrouping(mode);
+      await settings.setSortKey("tracks", "artist");
+      await player.playAt(4);
+      player.setShuffle(true);
+      player.setRepeat(repeat);
+      player.setVolume(0.4);
+      audio.currentTime = 25;
+      audio.dispatchEvent(new Event("timeupdate"));
+      const { current, queue, order, currentId } = player;
+      const source = audio.src;
+
+      root.querySelector<HTMLButtonElement>("#library-tab-albums")!.click();
+      await tick();
+      expect(root.querySelectorAll("[data-library-group]")).toHaveLength(2);
+      findButton("Record").click();
+      await tick();
+      const discTitles = () =>
+        [...root.querySelectorAll("h4")].map((item) => item.textContent?.trim());
+      const titles = () =>
+        [...root.querySelectorAll('[aria-label="曲一覧"] li .min-w-0 > .font-medium')].map(
+          (item) => item.textContent,
+        );
+      const sort = root.querySelector<HTMLSelectElement>("#library-panel select")!;
+      expect(sort.value).toBe("recording");
+      expect(discTitles()).toEqual(["Disc 1", "Disc 2"]);
+      expect(titles()).toEqual(["First", "Match A", "Second", "Match Z"]);
+
+      await filterLibrary("Match");
+      expect(titles()).toEqual(["Match A", "Match Z"]);
+      await filterLibrary("Match Z");
+      expect(discTitles()).toEqual(["Disc 2"]);
+      expect(titles()).toEqual(["Match Z"]);
+      await filterLibrary("Match");
+      sort.value = "title";
+      sort.dispatchEvent(new Event("change"));
+      await tick();
+      const direction = root.querySelectorAll<HTMLSelectElement>("#library-panel select")[1]!;
+      direction.value = "desc";
+      direction.dispatchEvent(new Event("change"));
+      await tick();
+      expect(discTitles()).toEqual([]);
+      expect(titles()).toEqual(["Match Z", "Match A"]);
+      expect(settings.librarySort.tracks).toEqual({ key: "artist", direction: "asc" });
+      expect(player.current).toBe(current);
+      expect(player.currentId).toBe(currentId);
+      expect(player.queue).toBe(queue);
+      expect(player.order).toBe(order);
+      expect(player.currentTime).toBe(25);
+      expect(audio.src).toBe(source);
+
+      findButton("Match A").click();
+      await vi.waitFor(() => expect(player.index).toBe(1));
+      expect(player.queue).toBe(queue);
+      expect(player.order).toBe(order);
+      expect(player.repeat).toBe(repeat);
+
+      const playAlbum = findButton("アルバムを再生");
+      const description = document.getElementById(playAlbum.getAttribute("aria-describedby")!);
+      expect(description?.textContent).toContain("現在のキューを置き換え、アルバム全 4 曲");
+      expect(description?.textContent).toContain("シャッフルを解除します");
+      expect(description?.textContent?.includes("1曲リピートを解除します")).toBe(repeat === "one");
+      playAlbum.click();
+      await vi.waitFor(() => expect(player.playing).toBe(true));
+      const recordingOrder = [first.path, firstDisc.path, second.path, otherDisc.path];
+      expect(player.queue.map(({ track }) => track.path)).toEqual(recordingOrder);
+      expect(player.order).toEqual(player.queue.map(({ id }) => id));
+      expect(player.current?.path).toBe(first.path);
+      expect(player.shuffle).toBe(false);
+      expect(player.repeat).toBe(albumRepeat);
+      expect(player.volume).toBe(0.4);
+
+      await player.flushPlayback();
+      player.setTracks(music);
+      await player.restorePlayback("root");
+      expect(player.queue.map(({ track }) => track.path)).toEqual(recordingOrder);
+      expect(player.current?.path).toBe(first.path);
+      expect(player.playing).toBe(false);
+      expect(player.repeat).toBe(albumRepeat);
+    },
+  );
+
   it.each(["metadata", "folder"] as const)(
     "updates each filtered view and open details without changing playback in %s mode",
     async (mode) => {
@@ -385,7 +484,7 @@ describe("library browser", () => {
       expect(groups()).toEqual(["Record2", "Record10"]);
       findButton("Record10").click();
       await tick();
-      expect(titles()).toEqual(["Song2", "Song10"]);
+      expect(titles()).toEqual(["Song10", "Song2"]);
       void settings.setSortDirection("tracks", "desc");
       await tick();
       expect(root.querySelector("#library-panel h2")?.textContent).toBe("Record10");
