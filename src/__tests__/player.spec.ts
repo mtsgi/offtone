@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { createPlayer } from "../lib/player";
 import type { Track } from "../lib/library";
+import { readSavedPlayback } from "../lib/playback-session";
 
 function track(name: string, fail = false): Track {
   return {
@@ -54,6 +55,196 @@ beforeEach(() => {
   revokeObjectURL.mockReset();
   URL.createObjectURL = createObjectURL;
   URL.revokeObjectURL = revokeObjectURL;
+});
+
+describe("playback restoration", () => {
+  it.each([false, true])(
+    "uses library order for an unedited queue with shuffle %s",
+    async (shuffle) => {
+      const player = createPlayer(audioElement());
+      const b = track("b.mp3");
+      const d = track("d.mp3");
+      const removed = track("e.mp3");
+      const previousTracks = [b, d, removed];
+      player.setTracks(previousTracks);
+      await player.playAt(1);
+      player.setShuffle(shuffle);
+      const saved = player.capturePlayback("root");
+
+      const tracks = [track("a.mp3"), b, track("c.mp3"), d];
+      player.setTracks(tracks);
+      player.restorePlayback(readSavedPlayback(saved, "root")!);
+
+      const restored = player.getState();
+      expect(restored.queue.map((entry) => entry.track)).toEqual(tracks);
+      expect(restored).toMatchObject({
+        index: 3,
+        currentId: restored.queue[3]!.id,
+        playing: false,
+      });
+      if (shuffle) {
+        const retained = saved.order
+          .map((index) => previousTracks[index])
+          .filter((track) => track !== removed);
+        const playbackOrder = restored.order.map(
+          (id) => restored.queue.find((entry) => entry.id === id)?.track,
+        );
+        expect(playbackOrder.slice(0, 2)).toEqual(retained);
+        expect(new Set(playbackOrder.slice(2))).toEqual(new Set([tracks[0], tracks[2]]));
+      }
+      player.setShuffle(false);
+      expect(player.getState().order).toEqual(restored.queue.map((entry) => entry.id));
+      player.dispose();
+    },
+  );
+
+  it("restores duplicate occurrences, queue order, shuffle order and paused position", async () => {
+    const previousAudio = audioElement();
+    const previous = createPlayer(previousAudio);
+    const a = track("a.mp3");
+    const b = track("b.mp3");
+    previous.setTracks([a, b, track("removed-from-queue.mp3")]);
+    previous.removeFromQueue(previous.getState().queue[2]!.id);
+    previous.addTrack(a);
+    const duplicate = previous.getState().queue[2]!;
+    await previous.playId(duplicate.id);
+    previous.setShuffle(true);
+    previous.moveQueue(2, 1);
+    previous.setRepeat("one");
+    previous.setVolume(0.4);
+    Object.defineProperty(previousAudio, "duration", { value: 120 });
+    previousAudio.dispatchEvent(new Event("loadedmetadata"));
+    previous.seek(74);
+    const saved = previous.capturePlayback("root");
+    expect(saved.current).toBe(1);
+    expect(saved.order[0]).toBe(1);
+    previous.dispose();
+
+    const audio = audioElement();
+    const play = vi.spyOn(audio, "play");
+    const read = vi.spyOn(a.handle, "getFile").mockClear();
+    const player = createPlayer(audio);
+    player.setTracks([track("0-new.mp3"), a, b, track("removed-from-queue.mp3")]);
+    const initialIds = player.getState().queue.map((entry) => entry.id);
+    player.restorePlayback(readSavedPlayback(saved, "root")!);
+    const restored = player.getState();
+    expect(restored.queue.map(({ track }) => track.path)).toEqual([
+      "a.mp3",
+      "a.mp3",
+      "b.mp3",
+      "0-new.mp3",
+    ]);
+    expect(restored.queue.every(({ id }) => !initialIds.includes(id))).toBe(true);
+    expect(restored.currentId).toBe(restored.queue[1]!.id);
+    expect(player.capturePlayback("root").order).toEqual([...saved.order, 3]);
+    expect(restored).toMatchObject({
+      playing: false,
+      currentTime: 74,
+      duration: null,
+      shuffle: true,
+      repeat: "one",
+      volume: 0.4,
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+    expect(audio.volume).toBe(0.4);
+
+    const starting = player.toggle();
+    await vi.waitFor(() => expect(play).toHaveBeenCalledOnce());
+    expect(audio.currentTime).toBe(0);
+    expect(player.getState().currentTime).toBe(74);
+    Object.defineProperty(audio, "duration", { value: 42 });
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    await starting;
+    expect(audio.currentTime).toBe(42);
+    expect(player.getState()).toMatchObject({ playing: true, currentTime: 42, duration: 42 });
+    player.dispose();
+  });
+
+  it("removes a missing selection, preserves surviving duplicates and honors an empty queue", async () => {
+    const audio = audioElement();
+    const play = vi.spyOn(audio, "play");
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    const b = track("b.mp3");
+    player.setTracks([a, b, track("excluded.mp3")]);
+    player.removeFromQueue(player.getState().queue[2]!.id);
+    player.addTrack(b);
+    await player.playAt(0);
+    Object.defineProperty(audio, "duration", { value: 30 });
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    player.seek(12);
+    const saved = player.capturePlayback("root");
+    player.setTracks([b, track("excluded.mp3"), track("new.mp3")]);
+    play.mockClear();
+    player.restorePlayback(saved);
+    expect(player.getState().queue.map(({ track }) => track.path)).toEqual([
+      "b.mp3",
+      "b.mp3",
+      "new.mp3",
+    ]);
+    expect(player.getState()).toMatchObject({ currentId: null, currentTime: 0, playing: false });
+    expect(play).not.toHaveBeenCalled();
+
+    for (const { id } of player.getState().queue) player.removeFromQueue(id);
+    const empty = player.capturePlayback("root");
+    player.setTracks([b, track("excluded.mp3"), track("new.mp3")]);
+    player.restorePlayback(empty);
+    expect(player.getState().queue).toEqual([]);
+    player.updateTracks([b, track("excluded.mp3"), track("new.mp3"), track("discovered.mp3")]);
+    expect(player.getState().queue.map(({ track }) => track.path)).toEqual(["discovered.mp3"]);
+    player.setTracks([]);
+    player.restorePlayback(saved);
+    expect(player.getState()).toMatchObject({ queue: [], currentId: null, currentTime: 0 });
+    player.dispose();
+  });
+
+  it("rejects unsupported data and ignores invalid playback values", () => {
+    const player = createPlayer(audioElement());
+    player.setTracks([track("a.mp3"), track("b.mp3")]);
+    const saved = player.capturePlayback("root");
+    expect(readSavedPlayback(saved, "other-root")).toBeUndefined();
+    expect(readSavedPlayback({ ...saved, version: 2 }, "root")).toBeUndefined();
+    expect(readSavedPlayback({ ...saved, queue: null }, "root")).toBeUndefined();
+    for (const position of [NaN, Infinity, -1, "30"]) {
+      expect(
+        readSavedPlayback(
+          { ...saved, order: [0, 0], current: 5, position, repeat: "bad", volume: 2 },
+          "root",
+        ),
+      ).toMatchObject({
+        order: [0, 1],
+        current: null,
+        position: 0,
+        repeat: "off",
+        volume: undefined,
+      });
+    }
+    player.dispose();
+  });
+
+  it("keeps the resumed position on a canceled read and discards it on a different selection", async () => {
+    const audio = audioElement();
+    const play = vi.spyOn(audio, "play");
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    const slow = deferred<File>();
+    vi.spyOn(a.handle, "getFile").mockReturnValueOnce(slow.promise);
+    player.setTracks([a, track("b.mp3")]);
+    const saved = player.capturePlayback("root");
+    player.restorePlayback({ ...saved, current: 0, position: 15 });
+    const starting = player.toggle();
+    await player.toggle();
+    expect(player.getState()).toMatchObject({ playing: false, currentTime: 15 });
+    await player.playAt(1);
+    slow.resolve(new File([], "a.mp3"));
+    await starting;
+    Object.defineProperty(audio, "duration", { value: 80 });
+    audio.dispatchEvent(new Event("loadedmetadata"));
+    expect(player.getState()).toMatchObject({ index: 1, playing: true, currentTime: 0 });
+    expect(play).toHaveBeenCalledOnce();
+    player.dispose();
+  });
 });
 
 describe("player", () => {

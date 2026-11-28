@@ -1,7 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { IDBDatabase, IDBFactory, IDBObjectStore } from "fake-indexeddb";
-import { getTrack, loadDirectory, putTrack, saveDirectory, StorageError } from "../lib/storage";
+import {
+  getTrack,
+  loadDirectory,
+  loadPlayback,
+  loadSettings,
+  putTrack,
+  saveDirectory,
+  savePlayback,
+  saveSettings,
+  StorageError,
+} from "../lib/storage";
 import type { MusicDirectory } from "../lib/library";
+import { trackId } from "../lib/catalog";
+import type { SavedPlayback } from "../lib/playback-session";
+import { parseSettings } from "../lib/settings";
 
 function open(version: number): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -33,6 +46,48 @@ afterEach(() => {
 });
 
 describe("IndexedDB v2", () => {
+  it("既存のフォルダー・設定・タグと同じ v2 DB にルート別の再生状態を保存する", async () => {
+    const dir = folder("a");
+    const rootId = await saveDirectory(dir);
+    const id = trackId(rootId, "song.mp3");
+    const record = { id, rootId, path: "song.mp3", size: 5, lastModified: 10 };
+    const settings = parseSettings({ theme: "dark" });
+    await putTrack(record);
+    await saveSettings(settings);
+    const playback: SavedPlayback = {
+      version: 1,
+      rootId,
+      library: [id],
+      queue: [id, id],
+      edited: true,
+      order: [1, 0],
+      current: 1,
+      position: 19,
+      shuffle: true,
+      repeat: "off",
+      volume: 0.5,
+    };
+    const other = {
+      ...playback,
+      rootId: "other",
+      library: [],
+      queue: [],
+      order: [],
+      current: null,
+      position: 0,
+    };
+    await Promise.all([savePlayback(playback), savePlayback(other)]);
+    expect(await loadPlayback(rootId)).toEqual(playback);
+    expect(await loadPlayback("other")).toEqual(other);
+    expect(await loadPlayback("unknown")).toBeUndefined();
+    expect(await loadDirectory()).toEqual(dir);
+    expect(await loadSettings()).toEqual(settings);
+    expect(await getTrack(id)).toEqual(record);
+    const db = await open(2);
+    expect([...db.objectStoreNames]).toEqual(["roots", "settings", "tracks"]);
+    db.close();
+  });
+
   it("新規作成し、同じフォルダーは ID を再利用し、同名の別フォルダーは区別する", async () => {
     const first = await saveDirectory(folder("a"));
     expect(await saveDirectory(folder("a"))).toBe(first);

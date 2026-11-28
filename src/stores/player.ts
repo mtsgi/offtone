@@ -2,17 +2,86 @@ import { computed, onScopeDispose, shallowReactive, shallowRef } from "vue";
 import { defineStore } from "pinia";
 import { createPlayer } from "../lib/player";
 import type { Track } from "../lib/library";
-import type { TrackMetadata } from "../lib/catalog";
+import type { RootId, TrackMetadata } from "../lib/catalog";
+import { readSavedPlayback, type SavedPlayback } from "../lib/playback-session";
+import { loadPlayback, savePlayback } from "../lib/storage";
+
+const POSITION_SAVE_INTERVAL = 5000;
+
+interface PlaybackSession {
+  rootId?: RootId;
+  restoration?: Promise<void>;
+  ready: boolean;
+  dirty: boolean;
+}
 
 /** 再生サービスの状態と操作を画面へ公開する。 */
 export const usePlayerStore = defineStore("player", () => {
   const player = createPlayer();
   const state = shallowRef(player.getState());
+  let session: PlaybackSession = { ready: false, dirty: false };
+  let updatingLibrary = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pendingSaves = new Map<RootId, SavedPlayback>();
+  let writing: Promise<void> | undefined;
+
+  function saveNow(): Promise<void> | undefined {
+    clearTimeout(timer);
+    timer = undefined;
+    const { rootId, ready, dirty } = session;
+    if (!rootId || !ready || !dirty) return writing;
+    session.dirty = false;
+    pendingSaves.set(rootId, player.capturePlayback(rootId));
+    // Serialize writes and keep just the latest pending snapshot for each root.
+    writing ??= Promise.resolve().then(async () => {
+      for (const [id, snapshot] of pendingSaves) {
+        pendingSaves.delete(id);
+        try {
+          await savePlayback(snapshot);
+        } catch {
+          if (session.rootId === id && session.ready && !pendingSaves.has(id)) session.dirty = true;
+        }
+      }
+      writing = undefined;
+    });
+    return writing;
+  }
+
+  async function flushPlayback(): Promise<void> {
+    player.refreshPosition();
+    await saveNow();
+  }
+  const onPageHide = () => void flushPlayback();
+  window.addEventListener("pagehide", onPageHide);
+
   const unsubscribe = player.subscribe((next) => {
+    const previous = state.value;
+    const changed =
+      next.queue !== previous.queue ||
+      next.order !== previous.order ||
+      next.currentId !== previous.currentId ||
+      next.shuffle !== previous.shuffle ||
+      next.repeat !== previous.repeat ||
+      next.volume !== previous.volume ||
+      (previous.playing && !next.playing) ||
+      (previous.seeking && !next.seeking);
+    const moved = next.currentTime !== previous.currentTime;
+    if ((changed || moved) && (session.ready || !updatingLibrary)) {
+      session.dirty = true;
+      // Once the user acts on this queue, a late restore must leave it alone.
+      if (session.rootId) session.ready = true;
+      if (session.ready) {
+        if (changed) void saveNow();
+        else timer ??= setTimeout(saveNow, POSITION_SAVE_INTERVAL);
+      }
+    }
     state.value = next;
   });
 
   onScopeDispose(() => {
+    window.removeEventListener("pagehide", onPageHide);
+    void flushPlayback();
+    session = { ready: false, dirty: false };
     unsubscribe();
     player.dispose();
   });
@@ -37,10 +106,42 @@ export const usePlayerStore = defineStore("player", () => {
   // Each track is independently reactive; file handles remain unproxied. Queue entries
   // refer to the same objects, so presentation changes do not rebuild the queue.
   function setTracks(tracks: Track[]): void {
-    player.setTracks(tracks.map((track) => shallowReactive(track)));
+    void flushPlayback();
+    session = { ready: false, dirty: false };
+    updatingLibrary = true;
+    try {
+      player.setTracks(tracks.map((track) => shallowReactive(track)));
+    } finally {
+      updatingLibrary = false;
+    }
   }
   function updateTracks(tracks: Track[]): void {
-    player.updateTracks(tracks.map((track) => shallowReactive(track)));
+    updatingLibrary = true;
+    try {
+      player.updateTracks(tracks.map((track) => shallowReactive(track)));
+    } finally {
+      updatingLibrary = false;
+    }
+  }
+  function restorePlayback(rootId: RootId): Promise<void> {
+    const active = session;
+    active.rootId = rootId;
+    if (active.dirty || active.ready) {
+      active.ready = true;
+      void saveNow();
+      return Promise.resolve();
+    }
+    active.restoration ??= (async () => {
+      // A prior visit to this root may still have a write in flight.
+      await writing;
+      if (session !== active || active.ready) return;
+      const raw = await loadPlayback(rootId).catch(() => undefined);
+      if (session !== active || active.ready) return;
+      const saved = readSavedPlayback(raw, rootId);
+      active.ready = true;
+      if (saved) player.restorePlayback(saved);
+    })();
+    return active.restoration;
   }
   function addTrack(track: Track): void {
     const canonical = state.value.tracks.find((item) => item.path === track.path);
@@ -69,6 +170,8 @@ export const usePlayerStore = defineStore("player", () => {
     volume,
     setTracks,
     updateTracks,
+    restorePlayback,
+    flushPlayback,
     updateTrackMetadata,
     playAt: player.playAt,
     toggle: player.toggle,

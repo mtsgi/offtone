@@ -10,11 +10,14 @@ interface RegistrationOptions {
 
 type Register = (options: RegistrationOptions) => (reload?: boolean) => Promise<void>;
 
+const PLAYBACK_SAVE_TIMEOUT_MS = 2000;
+
 /** The update remains visible until it is applied, including after the prompt is deferred. */
 export function createPwaUpdate(
   register: Register,
   workers: ServiceWorkerContainer,
   browser: Window,
+  beforeReload?: () => Promise<void>,
 ) {
   const state = reactive({
     available: false,
@@ -27,6 +30,27 @@ export function createPwaUpdate(
   let controller = workers.controller;
   let readyToReload = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let reloading = false;
+  let disposed = false;
+
+  async function reload() {
+    if (reloading) return;
+    reloading = true;
+    let saveTimeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (beforeReload) {
+        const deadline = new Promise<void>((resolve) => {
+          saveTimeout = setTimeout(resolve, PLAYBACK_SAVE_TIMEOUT_MS);
+        });
+        await Promise.race([beforeReload(), deadline]);
+      }
+    } catch {
+      // A failed playback save must not prevent the app update.
+    } finally {
+      clearTimeout(saveTimeout);
+    }
+    if (!disposed) browser.location.reload();
+  }
 
   function fail() {
     clearTimeout(timer);
@@ -43,7 +67,7 @@ export function createPwaUpdate(
     state.available = true;
     if (state.applying) {
       clearTimeout(timer);
-      browser.location.reload();
+      void reload();
     }
   }
 
@@ -95,7 +119,7 @@ export function createPwaUpdate(
     state.confirming = false;
     state.error = "";
     if (!registration?.waiting) {
-      if (readyToReload) browser.location.reload();
+      if (readyToReload) void reload();
       else {
         state.applying = false;
         state.available = false;
@@ -142,6 +166,7 @@ export function createPwaUpdate(
       if (state.confirming) void apply();
     },
     dispose() {
+      disposed = true;
       clearTimeout(timer);
       workers.removeEventListener("controllerchange", controllerChanged);
       browser.removeEventListener("online", onOnline);
