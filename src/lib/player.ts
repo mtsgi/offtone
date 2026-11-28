@@ -50,6 +50,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     volume: audio.volume,
   };
   const listeners = new Set<PlaybackListener>();
+  // Keep relative paths scoped to this library, even before it has a persistent root ID.
+  let libraryTracks = new WeakSet<Track>();
   let nextId = 0;
   let objectUrl: string | undefined;
   let generation = 0;
@@ -136,8 +138,13 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
   function makeEntry(track: Track): QueueEntry {
     return { id: ++nextId, track };
   }
+  function resolveTrack(track: Track): Track | undefined {
+    if (libraryTracks.has(track)) return state.tracks.find((item) => item.path === track.path);
+    if (track.id !== undefined) return state.tracks.find((item) => item.id === track.id);
+  }
   function setTracks(tracks: Track[]): void {
     cancelSelection();
+    libraryTracks = new WeakSet(tracks);
     edited = false;
     const queue = tracks.map(makeEntry);
     update({
@@ -191,6 +198,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     });
   }
   function updateTracks(tracks: Track[]): void {
+    for (const track of tracks) libraryTracks.add(track);
     const oldPaths = new Set(state.tracks.map((track) => track.path));
     const byPath = new Map(tracks.map((track) => [track.path, track]));
     let queue: QueueEntry[];
@@ -251,6 +259,19 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     edited = true;
     const entry = makeEntry(track);
     update({ queue: [...state.queue, entry], order: [...state.order, entry.id] });
+  }
+  function playNext(track: Track): boolean {
+    const target = resolveTrack(track);
+    if (!target || disposed) return false;
+    const entry = makeEntry(target);
+    const queue = [...state.queue];
+    const order = [...state.order];
+    // Insert after the current occurrence in both the editable and active playback order.
+    queue.splice(queue.findIndex(({ id }) => id === state.currentId) + 1, 0, entry);
+    order.splice(order.indexOf(state.currentId ?? -1) + 1, 0, entry.id);
+    edited = true;
+    update({ queue, order });
+    return true;
   }
   function removeFromQueue(id: number): void {
     if (!state.queue.some((entry) => entry.id === id)) return;
@@ -606,6 +627,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     },
     setTracks,
     updateTracks,
+    resolveTrack,
     restorePlayback,
     capturePlayback: (rootId: RootId) => capturePlayback(rootId, state, edited),
     refreshMetadata: syncMedia,
@@ -619,6 +641,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     setShuffle,
     setRepeat,
     addTrack,
+    playNext,
     removeFromQueue,
     moveQueue,
     seek,

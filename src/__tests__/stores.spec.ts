@@ -193,6 +193,39 @@ function mockAudio(): HTMLAudioElement {
 }
 
 describe("再生状態の永続化", () => {
+  it("次に再生と末尾追加の順序・重複を保存して復元する", async () => {
+    const audio = mockAudio();
+    const play = vi.spyOn(audio, "play");
+    const player = usePlayerStore();
+    const tracks = [playable("a.mp3"), playable("b.mp3")];
+    player.setTracks(tracks);
+    await player.restorePlayback("root-id");
+    await player.playAt(1);
+    player.setShuffle(true);
+    player.seek(21);
+    player.playNext(player.tracks[0]!);
+    player.addTrack(player.tracks[1]!);
+    await player.flushPlayback();
+
+    const saved = vi.mocked(savePlayback).mock.lastCall![0];
+    expect(saved).toMatchObject({
+      queue: ["a.mp3", "b.mp3", "a.mp3", "b.mp3"].map((path) => trackId("root-id", path)),
+      order: [1, 2, 0, 3],
+      current: 1,
+      position: 21,
+      edited: true,
+    });
+    const previousIds = player.queue.map(({ id }) => id);
+    vi.mocked(loadPlayback).mockResolvedValueOnce(saved);
+    player.setTracks(tracks);
+    await player.restorePlayback("root-id");
+    const ids = player.queue.map(({ id }) => id);
+    expect(ids.every((id) => !previousIds.includes(id))).toBe(true);
+    expect(player.order).toEqual([ids[1], ids[2], ids[0], ids[3]]);
+    expect(player).toMatchObject({ currentId: ids[1], currentTime: 21, playing: false });
+    expect(play).toHaveBeenCalledOnce();
+  });
+
   it("初回は通常キューで起動し、再生前の初期状態を書き込まない", async () => {
     const selected = folder("granted");
     vi.mocked(loadDirectory).mockResolvedValue(undefined);

@@ -1,14 +1,21 @@
+import type { InjectionKey, Ref } from "vue";
 import { parentFolderPath } from "./library";
 
 // The router uses memory history. One listener handles Android Back through
-// Now Playing, settings and the folder hierarchy in order.
+// overlays, settings and the folder hierarchy in order.
 const marker = "__offtoneView";
 const legacyMarker = "__offtoneNowPlaying";
 export interface AppView {
   settings: boolean;
   nowPlaying: boolean;
   folder: string;
+  trackActions?: true;
 }
+export const trackActionsHistoryKey: InjectionKey<{
+  open: Readonly<Ref<boolean>>;
+  show: () => boolean;
+  close: () => void;
+}> = Symbol("trackActionsHistory");
 const libraryView: AppView = { settings: false, nowPlaying: false, folder: "" };
 const folderDepth = (path: string) => (path ? path.split("/").length : 0);
 const isAncestor = (parent: string, path: string) =>
@@ -32,7 +39,8 @@ export function createViewHistory(browser: Window, setView: (view: AppView) => v
     if (
       view.settings === next.settings &&
       view.nowPlaying === next.nowPlaying &&
-      view.folder === next.folder
+      view.folder === next.folder &&
+      view.trackActions === next.trackActions
     )
       return;
     view = { ...next };
@@ -51,12 +59,13 @@ export function createViewHistory(browser: Window, setView: (view: AppView) => v
     settleFolder(next ?? libraryView);
   }
   function push(next: AppView) {
-    if (closing) return;
+    if (closing) return false;
     const id = ++nextId;
     browser.history.pushState({ ...state(), [marker]: { token, id } }, "");
     entries.set(id, { ...next });
     activeId = id;
     update(next);
+    return true;
   }
   function back(next: AppView, steps = 1) {
     if (closing) return;
@@ -76,7 +85,7 @@ export function createViewHistory(browser: Window, setView: (view: AppView) => v
     const adjusted = { ...next, folder: folderLimit };
     // A refresh or root change can invalidate folders beneath an open overlay.
     // Keep that overlay open and discard the obsolete entries when it closes.
-    if (next.settings || next.nowPlaying) {
+    if (next.settings || next.nowPlaying || next.trackActions) {
       update(adjusted);
       return;
     }
@@ -86,16 +95,26 @@ export function createViewHistory(browser: Window, setView: (view: AppView) => v
   browser.addEventListener("popstate", onPop);
   return {
     openSettings() {
-      if (!view.settings && !view.nowPlaying) push({ ...view, settings: true });
+      if (!view.settings && !view.nowPlaying && !view.trackActions)
+        push({ ...view, settings: true });
     },
     closeSettings() {
       if (view.settings && !view.nowPlaying) back({ ...view, settings: false });
     },
     openNowPlaying() {
-      if (!view.nowPlaying) push({ ...view, nowPlaying: true });
+      if (!view.nowPlaying && !view.trackActions) push({ ...view, nowPlaying: true });
     },
     closeNowPlaying() {
       if (view.nowPlaying) back({ ...view, nowPlaying: false });
+    },
+    openTrackActions() {
+      if (view.settings || view.nowPlaying || view.trackActions) return false;
+      return push({ ...view, trackActions: true });
+    },
+    closeTrackActions() {
+      if (!view.trackActions) return;
+      const { trackActions: _trackActions, ...next } = view;
+      back(next);
     },
     navigateFolder(path: string) {
       if (isAncestor(path, view.folder)) {
@@ -103,7 +122,8 @@ export function createViewHistory(browser: Window, setView: (view: AppView) => v
         if (closing) update({ ...view, folder: path });
         else settleFolder(entries.get(activeId) ?? libraryView);
       } else if (path && path !== view.folder && parentFolderPath(path) === view.folder) {
-        if (!view.settings && !view.nowPlaying) push({ ...view, folder: path });
+        if (!view.settings && !view.nowPlaying && !view.trackActions)
+          push({ ...view, folder: path });
       }
     },
     dispose() {

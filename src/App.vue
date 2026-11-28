@@ -1,13 +1,13 @@
 <script setup vapor lang="ts">
 import UApp from "@nuxt/ui/components/App.vue";
-import { nextTick, onMounted, onScopeDispose, ref, watch, watchEffect } from "vue";
+import { nextTick, onMounted, onScopeDispose, provide, ref, watch, watchEffect } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
 import NowPlaying from "./components/NowPlaying.vue";
 import SettingsView from "./components/SettingsView.vue";
 import { applyTheme } from "./lib/theme";
-import { createViewHistory } from "./lib/view-history";
+import { createViewHistory, trackActionsHistoryKey } from "./lib/view-history";
 import { useSettingsStore } from "./stores/settings";
 import DiagnosticsPanel from "./components/DiagnosticsPanel.vue";
 import UpdateNotice from "./components/UpdateNotice.vue";
@@ -17,13 +17,20 @@ const library = useLibraryStore();
 const settings = useSettingsStore();
 const settingsOpen = ref(false);
 const nowPlayingOpen = ref(false);
+const trackActionsOpen = ref(false);
 const folderPath = ref("");
 const viewHistory = createViewHistory(window, (view) => {
   const leavingSettings = settingsOpen.value && !view.settings;
   settingsOpen.value = view.settings;
   nowPlayingOpen.value = view.nowPlaying;
+  trackActionsOpen.value = view.trackActions === true;
   folderPath.value = view.folder;
   if (leavingSettings) void nextTick(() => document.getElementById("settings-button")?.focus());
+});
+provide(trackActionsHistoryKey, {
+  open: trackActionsOpen,
+  show: viewHistory.openTrackActions,
+  close: viewHistory.closeTrackActions,
 });
 watch(
   () => library.rootRevision,

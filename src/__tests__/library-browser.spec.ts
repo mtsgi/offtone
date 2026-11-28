@@ -35,6 +35,14 @@ function findButton(text: string): HTMLButtonElement {
   if (!found) throw new Error(`Missing button ${text}`);
   return found;
 }
+function trackMenu(title: string) {
+  return root.querySelector<HTMLButtonElement>(`button[aria-label="「${title}」の操作"]`)!;
+}
+function action(dialog: HTMLDialogElement, label: string) {
+  return [...dialog.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
 async function filterLibrary(value: string) {
   const search = root.querySelector<HTMLInputElement>("#library-search")!;
   search.value = value;
@@ -43,6 +51,20 @@ async function filterLibrary(value: string) {
 }
 beforeEach(async () => {
   vi.stubGlobal("indexedDB", new IDBFactory());
+  Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = true;
+      },
+    },
+    close: {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = false;
+      },
+    },
+  });
   vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
   vi.spyOn(HTMLMediaElement.prototype, "play").mockImplementation(function (
@@ -96,6 +118,108 @@ afterEach(() => {
 });
 
 describe("library browser", () => {
+  it("runs actions for a filtered track without activating its row on open or enqueue", async () => {
+    await player.playAt(0);
+    audio.currentTime = 12;
+    audio.dispatchEvent(new Event("timeupdate"));
+    const { queue, order, currentId } = player;
+    const source = audio.src;
+    const read = vi.spyOn(player.tracks[2]!.handle, "getFile");
+    await filterLibrary("Third");
+    const menu = trackMenu("Third");
+    expect(menu.parentElement?.querySelectorAll(":scope > button")).toHaveLength(2);
+    menu.click();
+    await tick();
+    const dialog = root.querySelector("dialog")!;
+    expect(dialog.open).toBe(true);
+    expect(menu.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(action(dialog, "再生"));
+    expect(
+      [...dialog.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    ).toEqual(["再生", "次に再生", "キューの最後に追加", "曲情報", "閉じる"]);
+    expect(player.queue).toBe(queue);
+    expect(player.order).toBe(order);
+    action(dialog, "次に再生").click();
+    await tick();
+    const inserted = player.queue[1]!;
+    expect(inserted.track.path).toBe("three.mp3");
+    expect(player.queue.filter((entry) => entry !== inserted)).toEqual(queue);
+    expect(player.order).toEqual([order[0], inserted.id, ...order.slice(1)]);
+    expect(dialog.open).toBe(false);
+    expect(menu.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(menu);
+
+    menu.click();
+    await tick();
+    action(root.querySelector("dialog")!, "キューの最後に追加").click();
+    await tick();
+    const appended = player.queue[player.queue.length - 1];
+    expect(appended?.track).toBe(inserted.track);
+    expect(appended?.id).not.toBe(inserted.id);
+    expect(player).toMatchObject({ currentId, playing: true, currentTime: 12 });
+    expect(audio.src).toBe(source);
+    expect(read).not.toHaveBeenCalled();
+
+    menu.click();
+    await tick();
+    action(root.querySelector("dialog")!, "再生").click();
+    await vi.waitFor(() => expect(player.currentId).toBe(inserted.id));
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("shows the selected folder track's local details and restores focus on Escape", async () => {
+    const selected = track("A/日本語 song.mp3", "Title", "Album");
+    selected.metadata!.albumArtist = "Album Artist";
+    const read = vi.spyOn(selected.handle, "getFile");
+    player.setTracks([track("B/other.mp3", "Other", "Album"), selected]);
+    root.querySelector<HTMLButtonElement>("#library-tab-folders")!.click();
+    await tick();
+    root.querySelector<HTMLButtonElement>('[data-folder-path="A"]')!.click();
+    await tick();
+    const menu = trackMenu("Title");
+    menu.click();
+    await tick();
+    const dialog = root.querySelector("dialog")!;
+    action(dialog, "曲情報").click();
+    await tick();
+    expect(document.activeElement).toBe(dialog.querySelector("h2"));
+    expect([...dialog.querySelectorAll("dd")].map((item) => item.textContent)).toEqual([
+      "Title",
+      "Artist",
+      "Album",
+      "Album Artist",
+      "日本語 song.mp3",
+      "A/日本語 song.mp3",
+    ]);
+    const cancel = new Event("cancel", { cancelable: true });
+    dialog.dispatchEvent(cancel);
+    await tick();
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(dialog.open).toBe(false);
+    expect(document.activeElement).toBe(menu);
+    expect(folderPath.value).toBe("A");
+    expect(player.currentId).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each(["removed", "different root"])("discards a menu when its track is %s", async (change) => {
+    trackMenu("Second").click();
+    await tick();
+    const dialog = root.querySelector("dialog")!;
+    const replacement = track("two.mp3", "Different", "Two");
+    const read = vi.spyOn(replacement.handle, "getFile");
+    if (change === "removed") player.updateTracks([player.tracks[0]!]);
+    else player.setTracks([replacement]);
+    const { queue } = player;
+    // A click delivered before the UI refresh still has to validate the selected track.
+    action(dialog, "キューの最後に追加").click();
+    await tick();
+    expect(dialog.open).toBe(false);
+    expect(player.queue).toBe(queue);
+    expect(player.currentId).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("browses only the current folder and matching branches with the shared track sort and playback", async () => {
     const rootTrack = track("root.mp3", "Root", "Library");
     const untagged = track("Vol2/同じ/song.mp3", "", "");

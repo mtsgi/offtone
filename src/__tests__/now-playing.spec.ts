@@ -449,6 +449,46 @@ describe("Now Playing", () => {
   });
 });
 
+describe("track menu and browser history", () => {
+  it("announces a queue edit and closes the menu before backing out of its folder", async () => {
+    player.setTracks([track("Disc/first.mp3"), track("second.mp3")]);
+    root.querySelector<HTMLButtonElement>("#library-tab-folders")!.click();
+    await tick();
+    root.querySelector<HTMLButtonElement>('[data-folder-path="Disc"]')!.click();
+    await tick();
+    const opener = button("「Disc/first」の操作");
+    const folderEntry = history.state;
+    const before = player.queue;
+    opener.click();
+    await tick();
+    const menu = root.querySelector<HTMLDialogElement>("dialog[open]")!;
+    const next = [...menu.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("次に再生"),
+    )!;
+    next.click();
+    await vi.waitFor(() => expect(history.state).toEqual(folderEntry));
+    expect(document.activeElement).toBe(opener);
+    expect(player.queue.slice(1)).toEqual(before);
+    expect(player.queue[0]?.track.path).toBe("Disc/first.mp3");
+    expect(player.currentId).toBeNull();
+    await vi.waitFor(() =>
+      expect(document.body.textContent).toContain("を次に再生する曲に追加しました。"),
+    );
+
+    opener.click();
+    await tick();
+    expect(root.querySelector("dialog[open]")).not.toBeNull();
+    history.back();
+    await vi.waitFor(() => expect(root.querySelector("dialog[open]")).toBeNull());
+    expect(history.state).toEqual(folderEntry);
+    expect(document.activeElement).toBe(opener);
+    expect(root.querySelector('[aria-current="location"]')?.textContent).toBe("Disc");
+    history.back();
+    await vi.waitFor(() => expect(button("「second」の操作")).toBeDefined());
+    expect(root.querySelector('[aria-current="location"]')?.textContent).toBe("ルート");
+  });
+});
+
 describe("temporary history entry", () => {
   it("does not navigate twice when close and Back race, and ignores stale forward entries", () => {
     const listeners = new Map<string, EventListener>();
