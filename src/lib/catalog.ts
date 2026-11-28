@@ -26,6 +26,8 @@ export interface TrackMetadata {
   artist?: string;
   albumArtist?: string;
   album?: string;
+  trackNumber?: number;
+  discNumber?: number;
   artworkRef?: string;
 }
 

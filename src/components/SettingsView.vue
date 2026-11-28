@@ -5,7 +5,7 @@ import { onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import { useSettingsStore } from "../stores/settings";
 import type { AlbumGrouping } from "../lib/music-catalog";
-import { SORT_KEYS, type SortKey, type SortView, type Theme } from "../lib/settings";
+import { SORT_KEYS, SORT_LABELS, type SortView, type Theme } from "../lib/settings";
 
 const emit = defineEmits<{ back: [] }>();
 const settings = useSettingsStore();
@@ -31,12 +31,6 @@ const sortViews: { id: SortView; label: string }[] = [
   { id: "albums", label: "アルバム" },
   { id: "artists", label: "アーティスト" },
 ];
-const sortLabels: Record<SortKey<SortView>, string> = {
-  library: "ライブラリ順",
-  title: "曲名",
-  artist: "アーティスト名",
-  album: "アルバム名",
-};
 const themeChoices: { value: Theme; label: string }[] = [
   { value: "system", label: "システム設定に合わせる（初期設定）" },
   { value: "light", label: "ライト" },
@@ -133,7 +127,7 @@ onMounted(() => heading.value?.focus());
             @change="settings.setSortKey(view.id, ($event.target as HTMLSelectElement).value)"
           >
             <option v-for="key in SORT_KEYS[view.id]" :key="key" :value="key">
-              {{ sortLabels[key] }}
+              {{ SORT_LABELS[key] }}
             </option>
           </select>
         </label>

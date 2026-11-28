@@ -42,7 +42,7 @@ async function writeLegacySettings() {
 }
 
 describe("settings", () => {
-  it("defaults to library order, metadata grouping and system appearance without writing to IndexedDB", async () => {
+  it("defaults to recording order for album tracks, library order elsewhere, metadata grouping and system appearance without writing to IndexedDB", async () => {
     const settings = useSettingsStore();
     expect(settings.preferences).toEqual(DEFAULT_SETTINGS);
     const read = vi.spyOn(storage, "loadSettings");
@@ -65,6 +65,8 @@ describe("settings", () => {
     await Promise.all([
       settings.setSortKey("tracks", "title"),
       settings.setSortDirection("tracks", "desc"),
+      settings.setSortKey("albumTracks", "title"),
+      settings.setSortDirection("albumTracks", "desc"),
       settings.setSortKey("albums", "artist"),
       settings.setSortDirection("albums", "desc"),
       settings.setSortKey("artists", "artist"),
@@ -75,6 +77,7 @@ describe("settings", () => {
       albumGrouping: "folder",
       librarySort: {
         tracks: { key: "title", direction: "desc" },
+        albumTracks: { key: "title", direction: "desc" },
         albums: { key: "artist", direction: "desc" },
         artists: { key: "artist", direction: "desc" },
       },
@@ -131,6 +134,7 @@ describe("settings", () => {
       albumGrouping: "folder",
       librarySort: {
         tracks: { key: "title", direction: "asc" },
+        albumTracks: { key: "recording", direction: "asc" },
         albums: { key: "library", direction: "desc" },
         artists: { key: "library", direction: "asc" },
       },
@@ -139,6 +143,7 @@ describe("settings", () => {
     expect(settings.preferences).toEqual(expected);
     await settings.setAlbumGrouping("invalid");
     await settings.setSortKey("albums", "title");
+    await settings.setSortKey("tracks", "recording");
     await settings.setSortKey("unknown", "artist");
     await settings.setSortDirection("artists", "wrong");
     await settings.setSortDirection("unknown", "desc");

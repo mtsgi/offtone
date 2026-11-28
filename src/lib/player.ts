@@ -278,8 +278,8 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     queue.splice(to, 0, entry!);
     update({ queue, order: state.shuffle ? state.order : queue.map((item) => item.id) });
   }
-  async function playId(id: number): Promise<void> {
-    if (disposed || !state.queue.some((entry) => entry.id === id)) return;
+  async function playSelection(id: number, replacement?: QueueEntry[]): Promise<void> {
+    if (disposed || !(replacement ?? state.queue).some((entry) => entry.id === id)) return;
     log("play-request");
     const run = ++generation;
     pending = true;
@@ -287,16 +287,21 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     const attempted = new Set<number>();
     let candidate: number | undefined = id;
     while (candidate !== undefined && !attempted.has(candidate)) {
-      const entry = state.queue.find((item) => item.id === candidate);
+      const queue = replacement ?? state.queue;
+      const entry = queue.find((item) => item.id === candidate);
       if (!entry || run !== generation) return;
       attempted.add(candidate);
       if (candidate !== state.currentId) resumePosition = undefined;
       update({
         ...stopped,
+        ...(replacement
+          ? { queue, order: queue.map((item) => item.id), shuffle: false, error: "" }
+          : {}),
         currentId: candidate,
-        index: libraryIndex(candidate),
+        index: libraryIndex(candidate, queue),
         currentTime: resumePosition ?? 0,
       });
+      replacement = undefined;
       log("track-switch");
       if (run !== generation) return;
       let reading = true;
@@ -333,6 +338,20 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       pending = false;
       update({ playing: false });
     }
+  }
+  function playId(id: number): Promise<void> {
+    return playSelection(id);
+  }
+  async function playAlbum(tracks: readonly Track[]): Promise<void> {
+    if (disposed || !tracks.length) return;
+    // Require tracks from the current library. A stale selection may belong to another
+    // folder with the same relative paths.
+    const library = new Set(state.tracks);
+    if (!tracks.every((track) => library.has(track))) return;
+
+    const queue = tracks.map(makeEntry);
+    edited = true;
+    await playSelection(queue[0]!.id, queue);
   }
   async function playAt(target: number): Promise<void> {
     const track = state.tracks[target];
@@ -586,6 +605,7 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
     refreshMetadata: syncMedia,
     refreshPosition: updatePosition,
     playAt,
+    playAlbum,
     playId,
     toggle,
     previous,

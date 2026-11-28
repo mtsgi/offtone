@@ -90,7 +90,7 @@ describe("metadata cache integration", () => {
     expect(mocks.parse).toHaveBeenCalledTimes(3);
     library.$dispose();
   });
-  it.each([1, 2, 3])(
+  it.each([1, 2, 3, 4])(
     "updates parser version %i cached metadata in place and reuses the new result",
     async (metadataVersion) => {
       let cached: TrackRecord = {
@@ -107,7 +107,12 @@ describe("metadata cache integration", () => {
         cached = record;
       });
       mocks.parse.mockResolvedValue({
-        metadata: { title: "アカシックレコード", albumArtist: "日本合唱団" },
+        metadata: {
+          title: "アカシックレコード",
+          albumArtist: "日本合唱団",
+          trackNumber: 3,
+          discNumber: 2,
+        },
       });
       const library = useLibraryStore();
       await library.selectFolder();
@@ -116,11 +121,13 @@ describe("metadata cache integration", () => {
       expect(usePlayerStore().tracks[0]?.metadata).toEqual({
         title: "アカシックレコード",
         albumArtist: "日本合唱団",
+        trackNumber: 3,
+        discNumber: 2,
       });
       expect(mocks.put).toHaveBeenCalledWith(
         expect.objectContaining({
           id: trackId("root", track.path),
-          metadataVersion: 4,
+          metadataVersion: 5,
           size: file.size,
           lastModified: file.lastModified,
         }),

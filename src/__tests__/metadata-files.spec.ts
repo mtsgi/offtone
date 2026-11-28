@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { parseBlob } from "music-metadata";
 import { parseTrackFile } from "../workers/metadata-file";
+import type { MetadataRequest, MetadataResponse } from "../workers/metadata-protocol";
 
 const japanese = {
   title: "夜の音楽",
@@ -86,7 +87,7 @@ async function mp3(leading?: Buffer, trailer?: Buffer) {
 
 describe("track metadata from generated audio files", () => {
   for (const extension of ["mp3", "m4a", "flac"]) {
-    it(`preserves ASCII tags from ${extension}`, async () => {
+    it(`preserves ASCII tags and recording numbers from ${extension}`, async () => {
       const { metadata, cover } = await parseTrackFile(
         new Blob([await fixture(`tagged.${extension}`)]),
       );
@@ -94,10 +95,49 @@ describe("track metadata from generated audio files", () => {
         title: "Fixture Title",
         artist: "Fixture Artist",
         album: "Fixture Album",
+        trackNumber: 7,
+        discNumber: 2,
       });
       if (extension === "mp3") expect(cover?.format).toBe("image/jpeg");
     });
   }
+  it("returns recording numbers for all supported formats from the metadata worker", async () => {
+    const worker = {
+      onmessage: async (_event: { data: MetadataRequest }) => {},
+      postMessage: vi.fn<(response: MetadataResponse) => void>(),
+    };
+    vi.stubGlobal("self", worker);
+    try {
+      await import("../workers/metadata.worker");
+      for (const [i, extension] of ["mp3", "m4a", "flac"].entries()) {
+        const name = `tagged.${extension}`;
+        await worker.onmessage({ data: { id: i, file: new File([await fixture(name)], name) } });
+        expect(worker.postMessage).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            id: i,
+            metadata: expect.objectContaining({ trackNumber: 7, discNumber: 2 }),
+          }),
+        );
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(["0", "-3", "2.5", "4oops", "1e2", "invalid", "9007199254740993"])(
+    "ignores invalid number tags (%s)",
+    async (value) => {
+      const file = await mp3(
+        id3v2(4, [
+          id3Frame(4, "TRCK", 3, Buffer.from(`${value}/12`)),
+          id3Frame(4, "TPOS", 3, Buffer.from(`${value}/3`)),
+        ]),
+      );
+      const { metadata } = await parseTrackFile(file);
+      expect(metadata.trackNumber).toBeUndefined();
+      expect(metadata.discNumber).toBeUndefined();
+    },
+  );
   it.each(["m4a", "flac"])("preserves Japanese Unicode tags from %s", async (extension) => {
     const file = new Blob([await fixture(`japanese.${extension}`)]);
     expect((await parseTrackFile(file)).metadata).toEqual(japanese);
@@ -273,6 +313,8 @@ describe("track metadata from generated audio files", () => {
   it("leaves an untagged file without a title for filename fallback", async () => {
     const parsed = await parseTrackFile(new Blob([await fixture("untagged.mp3")]));
     expect(parsed.metadata.title).toBeUndefined();
+    expect(parsed.metadata.trackNumber).toBeUndefined();
+    expect(parsed.metadata.discNumber).toBeUndefined();
   });
   it("rejects a corrupt file without affecting another parse", async () => {
     const truncatedTag = new Blob([

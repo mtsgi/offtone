@@ -57,6 +57,56 @@ beforeEach(() => {
   URL.revokeObjectURL = revokeObjectURL;
 });
 
+describe("album playback", () => {
+  it("publishes each replacement with its starting track and ignores a superseded file read", async () => {
+    const audio = audioElement();
+    const player = createPlayer(audio);
+    const a = track("a.mp3");
+    const b = track("b.mp3");
+    const c = track("c.mp3");
+    const read = deferred<File>();
+    vi.spyOn(b.handle, "getFile").mockReturnValueOnce(read.promise);
+    const play = vi.spyOn(audio, "play");
+    player.setTracks([a, b, c]);
+    player.setShuffle(true);
+    const published = vi.fn();
+    player.subscribe(published);
+
+    const pending = player.playAlbum([b, a]);
+    expect(published).toHaveBeenCalledTimes(1);
+    const first = player.getState();
+    expect(first.currentId).toBe(first.queue[0]?.id);
+    expect(first.queue.map(({ track }) => track)).toEqual([b, a]);
+    expect(first.order).toEqual(first.queue.map(({ id }) => id));
+    expect(first.shuffle).toBe(false);
+    expect(player.capturePlayback("root").edited).toBe(true);
+
+    await player.playAlbum([c]);
+    read.resolve(new File(["audio"], b.name));
+    await pending;
+    const latest = player.getState();
+    expect(latest.queue.map(({ track }) => track)).toEqual([c]);
+    expect(latest.currentId).toBe(latest.queue[0]?.id);
+    expect(latest.playing).toBe(true);
+    expect(play).toHaveBeenCalledOnce();
+    expect(createObjectURL).toHaveBeenCalledOnce();
+    player.dispose();
+  });
+
+  it("discards album selections whose tracks are no longer in the current library", async () => {
+    const player = createPlayer(audioElement());
+    const stale = track("same-path.mp3");
+    const read = vi.spyOn(stale.handle, "getFile");
+    player.setTracks([stale]);
+    player.setTracks([track(stale.path)]);
+    const before = player.getState();
+    await player.playAlbum([stale]);
+    expect(player.getState()).toBe(before);
+    expect(read).not.toHaveBeenCalled();
+    player.dispose();
+  });
+});
+
 describe("playback restoration", () => {
   it.each([false, true])(
     "uses library order for an unedited queue with shuffle %s",
