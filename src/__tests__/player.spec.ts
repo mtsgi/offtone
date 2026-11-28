@@ -69,6 +69,7 @@ describe("album playback", () => {
     const play = vi.spyOn(audio, "play");
     player.setTracks([a, b, c]);
     player.setShuffle(true);
+    player.setRepeat("one");
     const published = vi.fn();
     player.subscribe(published);
 
@@ -79,7 +80,8 @@ describe("album playback", () => {
     expect(first.queue.map(({ track }) => track)).toEqual([b, a]);
     expect(first.order).toEqual(first.queue.map(({ id }) => id));
     expect(first.shuffle).toBe(false);
-    expect(player.capturePlayback("root").edited).toBe(true);
+    expect(first.repeat).toBe("off");
+    expect(player.capturePlayback("root")).toMatchObject({ edited: true, repeat: "off" });
 
     await player.playAlbum([c]);
     read.resolve(new File(["audio"], b.name));
@@ -92,6 +94,35 @@ describe("album playback", () => {
     expect(createObjectURL).toHaveBeenCalledOnce();
     player.dispose();
   });
+
+  it.each(["one", "all"] as const)(
+    "plays the next album track and handles the end of the album with repeat %s",
+    async (repeat) => {
+      const audio = audioElement();
+      const player = createPlayer(audio);
+      const first = track("first.mp3");
+      const last = track("last.mp3");
+      player.setTracks([last, first]);
+      player.setRepeat(repeat);
+      await player.playAlbum([first, last]);
+      expect(player.getState()).toMatchObject({
+        index: 1,
+        repeat: repeat === "one" ? "off" : "all",
+      });
+
+      ended(audio);
+      await vi.waitFor(() => expect(player.getState()).toMatchObject({ index: 0, playing: true }));
+      ended(audio);
+      if (repeat === "all") {
+        await vi.waitFor(() =>
+          expect(player.getState()).toMatchObject({ index: 1, playing: true }),
+        );
+      } else {
+        expect(player.getState()).toMatchObject({ index: 0, playing: false });
+      }
+      player.dispose();
+    },
+  );
 
   it("discards album selections whose tracks are no longer in the current library", async () => {
     const player = createPlayer(audioElement());

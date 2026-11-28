@@ -214,9 +214,12 @@ describe("library browser", () => {
     expect(folderPath.value).toBe("");
   });
 
-  it.each(["metadata", "folder"] as const)(
-    "keeps recording order through search and replaces the queue only on album play in %s mode",
-    async (mode) => {
+  it.each([
+    { mode: "metadata", repeat: "one", albumRepeat: "off" },
+    { mode: "folder", repeat: "all", albumRepeat: "all" },
+  ] as const)(
+    "keeps recording order through search and replaces the queue only on album play in $mode mode",
+    async ({ mode, repeat, albumRepeat }) => {
       const otherDisc = track("album/z.mp3", "Match Z", "Record");
       otherDisc.metadata!.discNumber = 2;
       const firstDisc = track("album/a.mp3", "Match A", "Record");
@@ -233,7 +236,7 @@ describe("library browser", () => {
       await settings.setSortKey("tracks", "artist");
       await player.playAt(4);
       player.setShuffle(true);
-      player.setRepeat("all");
+      player.setRepeat(repeat);
       player.setVolume(0.4);
       audio.currentTime = 25;
       audio.dispatchEvent(new Event("timeupdate"));
@@ -283,11 +286,13 @@ describe("library browser", () => {
       await vi.waitFor(() => expect(player.index).toBe(1));
       expect(player.queue).toBe(queue);
       expect(player.order).toBe(order);
+      expect(player.repeat).toBe(repeat);
 
       const playAlbum = findButton("アルバムを再生");
       const description = document.getElementById(playAlbum.getAttribute("aria-describedby")!);
       expect(description?.textContent).toContain("現在のキューを置き換え、アルバム全 4 曲");
       expect(description?.textContent).toContain("シャッフルを解除します");
+      expect(description?.textContent?.includes("1曲リピートを解除します")).toBe(repeat === "one");
       playAlbum.click();
       await vi.waitFor(() => expect(player.playing).toBe(true));
       const recordingOrder = [first.path, firstDisc.path, second.path, otherDisc.path];
@@ -295,7 +300,7 @@ describe("library browser", () => {
       expect(player.order).toEqual(player.queue.map(({ id }) => id));
       expect(player.current?.path).toBe(first.path);
       expect(player.shuffle).toBe(false);
-      expect(player.repeat).toBe("all");
+      expect(player.repeat).toBe(albumRepeat);
       expect(player.volume).toBe(0.4);
 
       await player.flushPlayback();
@@ -304,6 +309,7 @@ describe("library browser", () => {
       expect(player.queue.map(({ track }) => track.path)).toEqual(recordingOrder);
       expect(player.current?.path).toBe(first.path);
       expect(player.playing).toBe(false);
+      expect(player.repeat).toBe(albumRepeat);
     },
   );
 

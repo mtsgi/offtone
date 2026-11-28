@@ -13,22 +13,34 @@ const numberTags: Record<string, Partial<Record<NumberField, RegExp>>> = {
   vorbis: { track: /^tracknumber$/i, disk: /^discnumber$/i },
 };
 
-function readNumber(parsed: IAudioMetadata, field: NumberField): number | undefined {
-  const number = parsed.common[field]?.no;
-  if (typeof number !== "number" || !Number.isSafeInteger(number) || number <= 0) return;
+function parseTagNumber(value: unknown): number | undefined {
+  if (typeof value === "string") {
+    const numerator = value.split("/", 1)[0]!.trim();
+    if (!/^\+?\d+$/.test(numerator)) return;
+    value = Number(numerator);
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) return value;
+}
 
-  // music-metadata uses parseInt for textual numbers, so an invalid value such as
-  // "2.5" can also produce common.track.no = 2. Check the corresponding native tag.
+function readNumber(parsed: IAudioMetadata, field: NumberField): number | undefined {
+  const common = parsed.common[field]?.no;
+  let hasNativeTag = false;
+  let fallback: number | undefined;
+  // Prefer the common number when a valid native tag supports it. music-metadata
+  // uses parseInt, so a later malformed tag can truncate or overwrite that number.
   for (const [type, tags] of Object.entries(parsed.native)) {
     const pattern = numberTags[type]?.[field];
     if (!pattern) continue;
-    const matches = tags.filter(({ id }) => pattern.test(id));
-    const tag = matches[matches.length - 1];
-    if (typeof tag?.value !== "string") continue;
-    const numerator = tag.value.split("/", 1)[0]!.trim();
-    if (Number.parseInt(numerator, 10) === number && !/^\+?\d+$/.test(numerator)) return;
+    for (const { id, value } of tags) {
+      if (!pattern.test(id)) continue;
+      hasNativeTag = true;
+      const number = parseTagNumber(value);
+      if (number === undefined) continue;
+      if (number === common) return number;
+      fallback = number;
+    }
   }
-  return number;
+  return hasNativeTag ? fallback : parseTagNumber(common);
 }
 
 export async function parseTrackFile(file: Blob) {

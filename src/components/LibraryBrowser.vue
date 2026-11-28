@@ -263,6 +263,7 @@ watch([catalog, selected, view], () => {
             <p id="play-album-description" class="text-sm text-muted">
               現在のキューを置き換え、アルバム全 {{ album.tracks.length }} 曲を収録順で再生します。
               <span v-if="player.shuffle">シャッフルを解除します。</span>
+              <span v-if="player.repeat === 'one'">1曲リピートを解除します。</span>
             </p>
           </div>
           <div class="flex flex-wrap gap-2">

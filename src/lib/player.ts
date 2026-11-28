@@ -295,7 +295,13 @@ export function createPlayer(audio: HTMLAudioElement = new Audio()) {
       update({
         ...stopped,
         ...(replacement
-          ? { queue, order: queue.map((item) => item.id), shuffle: false, error: "" }
+          ? {
+              queue,
+              order: queue.map((item) => item.id),
+              shuffle: false,
+              repeat: state.repeat === "one" ? "off" : state.repeat,
+              error: "",
+            }
           : {}),
         currentId: candidate,
         index: libraryIndex(candidate, queue),
