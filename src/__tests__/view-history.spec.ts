@@ -9,6 +9,9 @@ function setup(initial: Record<string, unknown> = { existing: 1 }) {
   const back = vi.fn(() => {
     pending = true;
   });
+  const go = vi.fn((_delta: number) => {
+    pending = true;
+  });
   const browser = {
     history: {
       get state() {
@@ -21,6 +24,7 @@ function setup(initial: Record<string, unknown> = { existing: 1 }) {
         entries[index] = next;
       },
       back,
+      go,
     },
     addEventListener: (_: string, cb: EventListener) => listeners.add(cb),
     removeEventListener: (_: string, cb: EventListener) => listeners.delete(cb),
@@ -32,7 +36,17 @@ function setup(initial: Record<string, unknown> = { existing: 1 }) {
   }
   const changed = vi.fn();
   const controller = createViewHistory(browser, changed);
-  return { controller, changed, browser, back, pop, entries, listeners, isPending: () => pending };
+  return {
+    controller,
+    changed,
+    browser,
+    back,
+    go,
+    pop,
+    entries,
+    listeners,
+    isPending: () => pending,
+  };
 }
 
 describe("settings and Now Playing history", () => {
@@ -41,11 +55,15 @@ describe("settings and Now Playing history", () => {
     h.controller.openSettings();
     h.controller.openNowPlaying();
     expect(h.entries).toHaveLength(3);
-    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: true });
+    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: true, folder: "" });
     h.pop();
-    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: false });
+    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: false, folder: "" });
     h.pop();
-    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: false, nowPlaying: false });
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "",
+    });
     expect(h.browser.history.state).toEqual({ existing: 1 });
     expect(h.back).not.toHaveBeenCalled();
   });
@@ -61,7 +79,11 @@ describe("settings and Now Playing history", () => {
       h.controller.openNowPlaying(); // ignored while history.back is pending
       expect(h.isPending()).toBe(true);
       h.pop();
-      expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: false });
+      expect(h.changed.mock.lastCall?.[0]).toEqual({
+        settings: true,
+        nowPlaying: false,
+        folder: "",
+      });
       h.controller.closeSettings();
       h.controller.closeSettings();
       h.controller.openSettings();
@@ -76,7 +98,11 @@ describe("settings and Now Playing history", () => {
     h.controller.openSettings();
     expect(h.entries).toHaveLength(2);
     h.pop();
-    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: false, nowPlaying: false });
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "",
+    });
     h.pop(1);
     expect(h.browser.history.state).toEqual({ existing: 1 });
     expect(h.changed).toHaveBeenCalledTimes(2);
@@ -100,5 +126,65 @@ describe("settings and Now Playing history", () => {
     stale.controller.openSettings();
     stale.controller.dispose();
     expect(stale.browser.history.state).toEqual({ existing: 2 });
+  });
+  it("backs through overlays before folders, and jumps to an ancestor without adding entries", () => {
+    const h = setup();
+    h.controller.navigateFolder("A");
+    h.controller.navigateFolder("A/B");
+    h.controller.navigateFolder("A/B/C");
+    h.controller.openSettings();
+    h.controller.openNowPlaying();
+    h.pop();
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: true,
+      nowPlaying: false,
+      folder: "A/B/C",
+    });
+    h.pop();
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "A/B/C",
+    });
+    h.pop();
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "A/B",
+    });
+    h.controller.navigateFolder("");
+    expect(h.go).toHaveBeenCalledWith(-2);
+    expect(h.entries).toHaveLength(6);
+    h.pop(-2);
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "",
+    });
+    expect(h.browser.history.state).toEqual({ existing: 1 });
+  });
+  it("discards a former root beneath settings without dismissing settings or reviving its path", () => {
+    const h = setup();
+    h.controller.navigateFolder("A");
+    h.controller.navigateFolder("A/B");
+    h.controller.openSettings();
+    h.controller.navigateFolder("");
+    expect(h.changed.mock.lastCall?.[0]).toEqual({ settings: true, nowPlaying: false, folder: "" });
+    expect(h.go).not.toHaveBeenCalled();
+    h.pop();
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "",
+    });
+    expect(h.go).toHaveBeenCalledWith(-2);
+    h.pop(-2);
+    h.pop(1);
+    expect(h.changed.mock.lastCall?.[0]).toEqual({
+      settings: false,
+      nowPlaying: false,
+      folder: "",
+    });
+    expect(h.browser.history.state).toEqual({ existing: 1 });
   });
 });

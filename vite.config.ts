@@ -37,6 +37,7 @@ export default defineConfig({
             "lucide:skip-forward",
             "lucide:music-2",
             "lucide:chevron-down",
+            "lucide:chevron-right",
             "lucide:shuffle",
             "lucide:repeat",
             "lucide:repeat-1",

@@ -1,6 +1,6 @@
 <script setup vapor lang="ts">
 import UApp from "@nuxt/ui/components/App.vue";
-import { nextTick, onMounted, onScopeDispose, ref, watchEffect } from "vue";
+import { nextTick, onMounted, onScopeDispose, ref, watch, watchEffect } from "vue";
 import FolderHeader from "./components/FolderHeader.vue";
 import MusicLibrary from "./components/MusicLibrary.vue";
 import PlaybackBar from "./components/PlaybackBar.vue";
@@ -17,12 +17,19 @@ const library = useLibraryStore();
 const settings = useSettingsStore();
 const settingsOpen = ref(false);
 const nowPlayingOpen = ref(false);
+const folderPath = ref("");
 const viewHistory = createViewHistory(window, (view) => {
   const leavingSettings = settingsOpen.value && !view.settings;
   settingsOpen.value = view.settings;
   nowPlayingOpen.value = view.nowPlaying;
+  folderPath.value = view.folder;
   if (leavingSettings) void nextTick(() => document.getElementById("settings-button")?.focus());
 });
+watch(
+  () => library.rootRevision,
+  () => viewHistory.navigateFolder(""),
+  { flush: "sync" },
+);
 onScopeDispose(() => viewHistory.dispose());
 
 const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)");
@@ -47,7 +54,11 @@ onMounted(() => {
     <div class="flex min-h-dvh flex-col">
       <FolderHeader :settings-open="settingsOpen" @settings="viewHistory.openSettings" />
       <UpdateNotice />
-      <MusicLibrary v-show="!settingsOpen" />
+      <MusicLibrary
+        v-show="!settingsOpen"
+        :folder-path="folderPath"
+        @navigate-folder="viewHistory.navigateFolder"
+      />
       <SettingsView v-if="settingsOpen" @back="viewHistory.closeSettings" />
       <DiagnosticsPanel v-show="!settingsOpen" />
       <PlaybackBar @open="viewHistory.openNowPlaying" />
